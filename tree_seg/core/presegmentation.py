@@ -1,0 +1,1 @@
+#uses cellpose like but descrete algorythm to presegment the image

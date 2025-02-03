@@ -3,12 +3,6 @@ from torch.utils.data import Dataset
 import numpy as np
 from scipy.ndimage import rotate
 
-import time
-
-# Set random seed
-seed = int(time.time())
-np.random.seed(seed)
-
 def random_rotation_and_mirror(image, mask, flow):
     """Apply random 90-degree rotation and mirroring to data for augmentation."""
     k = np.random.randint(0, 4)
