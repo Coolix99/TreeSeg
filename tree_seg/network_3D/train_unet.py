@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from torch.utils.data import DataLoader, random_split
-from tree_seg.network_3D.dataset3d import Dataset3D  # Use the new dataset class
-from tree_seg.network_3D.UNet3D import UNet3D  # Ensure this file exists
+from tree_seg.network_3D.dataset3d import Dataset3D 
+from tree_seg.network_3D.UNet3D import UNet3D  
 
 def angle_loss(pred_flow, true_flow, mask):
     """Angle loss between predicted and true flow field."""
@@ -21,7 +21,6 @@ def masked_cross_entropy_loss(logits, target, mask, criterion):
     # Compute loss
     loss = criterion(logits, target.float())
     return (loss * mask).sum() / mask.sum()
-
 
 def train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list):
     """Train the UNet3D model using the provided configuration."""
