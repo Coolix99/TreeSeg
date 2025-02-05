@@ -18,20 +18,23 @@ def angle_loss(pred_flow, true_flow, mask):
 def masked_cross_entropy_loss(logits, target, mask, criterion):
     """Masked cross-entropy loss for segmentation."""
     mask = mask.float()
-    loss = criterion(logits, target.long())
+    # Compute loss
+    loss = criterion(logits, target.float())
     return (loss * mask).sum() / mask.sum()
 
-def train_model(config):
+
+def train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list):
     """Train the UNet3D model using the provided configuration."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Load dataset
     dataset = Dataset3D(
-        np.load(config["dataset_paths"]["nuclei"]),
-        np.load(config["dataset_paths"]["masks"]),
-        np.load(config["dataset_paths"]["flows"]),
-        np.load(config["dataset_paths"].get("profiles", None)),  # Handle missing profiles
+        nuclei_list,
+        masks_list,
+        flows_list,
+        profiles_list,
+        neighbors_list,
         patch_size=(config["patch_size"], config["patch_size"], config["patch_size"])
     )
 
@@ -46,7 +49,7 @@ def train_model(config):
     # Initialize model
     model = UNet3D(n_channels=1, context_size=config["context_size"], patch_size=config["patch_size"]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
-    criterion_segmentation = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 1.0], dtype=torch.float32).to(device))
+    criterion_segmentation = nn.BCEWithLogitsLoss().to(device)
 
     # Checkpoint handling
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
@@ -73,16 +76,25 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
     model.train()
     running_loss = 0.0
 
-    for images, masks, flows, prof in train_loader:
-        images, masks, flows, prof = images.to(device), masks.to(device), flows.to(device), prof.to(device)
+    for images, masks, flows, prof, neighbors in train_loader:
+        images, masks, flows, prof, neighbors = (
+            images.to(device), masks.to(device), flows.to(device), 
+            prof.to(device), neighbors.to(device)
+        )
+        masks = masks.unsqueeze(1)  
+    
         optimizer.zero_grad()
 
         seg_logits, pred_flows, neighbor_logits = model(images, prof)
 
-        mask = images > 0  # Mask based on intensities
+        mask = images > 0  # Mask based on valid image regions
+
+        # Compute losses
         loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask, criterion)
         loss_flow = angle_loss(pred_flows, flows, mask)
-        loss = loss_segmentation + loss_flow
+        loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask, criterion)
+
+        loss = loss_segmentation + loss_flow + loss_neighbors
 
         loss.backward()
         optimizer.step()
@@ -96,15 +108,22 @@ def validate_one_epoch(model, val_loader, criterion, device):
     val_loss = 0.0
 
     with torch.no_grad():
-        for images, masks, flows, prof in val_loader:
-            images, masks, flows, prof = images.to(device), masks.to(device), flows.to(device), prof.to(device)
-
+        for images, masks, flows, prof, neighbors in val_loader:
+            images, masks, flows, prof, neighbors = (
+                images.to(device), masks.to(device), flows.to(device), 
+                prof.to(device), neighbors.to(device)
+            )
+            masks = masks.unsqueeze(1)  
             seg_logits, pred_flows, neighbor_logits = model(images, prof)
 
             mask = images > 0
+
+            # Compute losses
             loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask, criterion)
             loss_flow = angle_loss(pred_flows, flows, mask)
-            loss = loss_segmentation + loss_flow
+            loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask, criterion)
+
+            loss = loss_segmentation + loss_flow + loss_neighbors
 
             val_loss += loss.item()
 
