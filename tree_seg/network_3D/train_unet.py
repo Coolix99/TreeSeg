@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from torch.utils.data import DataLoader, random_split
-from dataset3d import Dataset3D  # Use the new dataset class
+from tree_seg.network_3D.dataset3d import Dataset3D  # Use the new dataset class
 from tree_seg.network_3D.UNet3D import UNet3D  # Ensure this file exists
 
 def angle_loss(pred_flow, true_flow, mask):
