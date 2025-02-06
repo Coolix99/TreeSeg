@@ -22,6 +22,28 @@ def masked_cross_entropy_loss(logits, target, mask, criterion):
     loss = criterion(logits, target.float())
     return (loss * mask).sum() / mask.sum()
 
+def dice_loss(logits, target, mask, smooth=1e-6):
+    """
+    Compute Dice Loss with masking.
+
+    Args:
+        logits (torch.Tensor): Model outputs (before sigmoid). Shape: (B, C, D, H, W)
+        target (torch.Tensor): Ground truth binary mask. Shape: (B, C, D, H, W)
+        mask (torch.Tensor): Valid region mask. Shape: (B, C, D, H, W)
+        smooth (float): Smoothing term to prevent division by zero.
+
+    Returns:
+        torch.Tensor: Dice loss value.
+    """
+    mask = mask.float()
+    probas = torch.sigmoid(logits)  # Convert logits to probabilities
+
+    intersection = (probas * target * mask).sum()
+    denominator = (probas * mask).sum() + (target * mask).sum() + smooth  # Sum over foreground pixels
+
+    loss = 1 - (2.0 * intersection / denominator)  # Dice coefficient
+    return loss
+
 def train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list):
     """Train the UNet3D model using the provided configuration."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,8 +112,10 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
 
         # Compute losses
         loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask, criterion)
-        loss_flow = angle_loss(pred_flows, flows, mask)
         loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask, criterion)
+        # loss_segmentation = dice_loss(seg_logits, masks, mask)
+        # loss_neighbors = dice_loss(neighbor_logits, neighbors, mask)
+        loss_flow = angle_loss(pred_flows, flows, mask)
 
         loss = loss_segmentation + loss_flow + loss_neighbors
 

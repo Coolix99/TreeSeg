@@ -99,8 +99,8 @@ class UNet3D(nn.Module):
         x = self.up2(x, x2)
         x = self.up3(x, x1)
         
-        seg_logits = torch.sigmoid(self.seg_outc(x))  # Ensuring values between 0-1
+        seg_logits = self.seg_outc(x)
         flow_field = F.normalize(self.flow_outc(x), p=2, dim=1)  # Normalized vector field
-        neighbor_logits = torch.sigmoid(self.neighbor_outc(x))  # Values between 0-1
+        neighbor_logits = self.neighbor_outc(x)
 
         return seg_logits, flow_field, neighbor_logits

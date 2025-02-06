@@ -115,5 +115,5 @@ def reconstruct_image(image_shape, patch_size, patches, positions):
     reconstructed_flow[:, nonzero_flows_mask] /= flow_magnitudes[nonzero_flows_mask]
 
     # Convert segmentation to binary
-    reconstructed_seg = (reconstructed_seg > 0.49).astype(bool)
+    reconstructed_seg = (reconstructed_seg > 0.0).astype(bool)
     return reconstructed_seg, reconstructed_flow, reconstructed_neighbors
