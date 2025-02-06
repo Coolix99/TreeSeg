@@ -17,13 +17,24 @@ class ApplyDataset(Dataset):
         patches = []
         positions = []
         stride = tuple(s - o for s, o in zip(self.patch_size, self.overlap))
-        for z in range(0, self.image.shape[0] - self.patch_size[0] + 1, stride[0]):
-            for y in range(0, self.image.shape[1] - self.patch_size[1] + 1, stride[1]):
-                for x in range(0, self.image.shape[2] - self.patch_size[2] + 1, stride[2]):
-                    patch = self.image[z:z + self.patch_size[0], y:y + self.patch_size[1], x:x + self.patch_size[2]]
+        
+        # Ensure full coverage by extending to cover the last region
+        for z in range(0, self.image.shape[0], stride[0]):
+            for y in range(0, self.image.shape[1], stride[1]):
+                for x in range(0, self.image.shape[2], stride[2]):
+                    # Ensure patch fits in the image
+                    z_start = min(z, self.image.shape[0] - self.patch_size[0])
+                    y_start = min(y, self.image.shape[1] - self.patch_size[1])
+                    x_start = min(x, self.image.shape[2] - self.patch_size[2])
+
+                    patch = self.image[z_start:z_start + self.patch_size[0], 
+                                    y_start:y_start + self.patch_size[1], 
+                                    x_start:x_start + self.patch_size[2]]
+                    
                     if np.any(patch):  # Only process patches with non-zero content
                         patches.append(patch)
-                        positions.append(np.array((z, y, x)))
+                        positions.append(np.array((z_start, y_start, x_start)))
+
         return patches, positions
 
     def __len__(self):
@@ -41,7 +52,6 @@ def apply_model(config, image, profile):
 
     # Load trained model
     model = UNet3D(n_channels=1, context_size=config["context_size"], patch_size=config["patch_size"]).to(device)
-    print(config["model_path"])
 
     # Correct way to load weights
     checkpoint = torch.load(config["model_path"], map_location=device)  
@@ -63,14 +73,13 @@ def apply_model(config, image, profile):
         for patches, profiles, pos in dataloader:
             patches, profiles = patches.to(device), profiles.to(device)
             seg_logits, pred_flows, neighbor_logits = model(patches, profiles)
-
-            # Convert predictions
-            segmentation = (torch.sigmoid(seg_logits) > 0.5).cpu().numpy()  # Threshold segmentation
+          
             pred_flows = pred_flows.cpu().numpy()
-            neighbors = torch.sigmoid(neighbor_logits).cpu().numpy()  # Convert neighbor predictions
-
+            seg_logits = seg_logits.cpu().numpy()[:,0,:,:,:]
+            neighbor_logits = neighbor_logits.cpu().numpy()
+           
             for i in range(len(patches)):
-                processed_patches.append((segmentation[i, 0], pred_flows[i], neighbors[i]))
+                processed_patches.append((seg_logits[i], pred_flows[i], neighbor_logits[i]))
                 positions.append(pos[i].numpy())
 
     # Reconstruct full image
@@ -107,5 +116,4 @@ def reconstruct_image(image_shape, patch_size, patches, positions):
 
     # Convert segmentation to binary
     reconstructed_seg = (reconstructed_seg > 0.49).astype(bool)
-
     return reconstructed_seg, reconstructed_flow, reconstructed_neighbors

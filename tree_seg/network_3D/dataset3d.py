@@ -30,15 +30,15 @@ def random_rotation_and_mirror(image, mask, flow, neighbors):
         neighbors = neighbors[[0, 1, 3, 2, 5, 4]]  
     elif k == 3:  # 270 degrees
         neighbors = neighbors[[0, 1, 5, 4, 2, 3]]  
-
+    
     # Apply random flipping
     if np.random.rand() > 0.5:
-        image, mask, flow = np.flip(image, axis=2), np.flip(mask, axis=1), np.flip(flow, axis=2)
+        image, mask, flow, neighbors = np.flip(image, axis=2), np.flip(mask, axis=1), np.flip(flow, axis=2), np.flip(neighbors, axis=2)
         flow[1, :, :, :] = -flow[1, :, :, :]
         neighbors = neighbors[[0, 1, 3, 2, 4, 5]]
 
     if np.random.rand() > 0.5:
-        image, mask, flow = np.flip(image, axis=1), np.flip(mask, axis=0), np.flip(flow, axis=1)
+        image, mask, flow, neighbors= np.flip(image, axis=1), np.flip(mask, axis=0), np.flip(flow, axis=1), np.flip(neighbors, axis=1)
         flow[0, :, :, :] = -flow[0, :, :, :]
         neighbors = neighbors[[1, 0, 2, 3, 4, 5]]
 
@@ -110,9 +110,9 @@ class Dataset3D(Dataset):
 
         # Convert to PyTorch tensors
         img_patch = torch.from_numpy(np.ascontiguousarray(img_patch)).float()
-        mask_patch = torch.from_numpy(np.ascontiguousarray(mask_patch)).long()
+        mask_patch = torch.from_numpy(np.ascontiguousarray(mask_patch)).bool()
         flow_patch = torch.from_numpy(np.ascontiguousarray(flow_patch)).float()
-        neighbors_patch = torch.from_numpy(np.ascontiguousarray(neighbors_patch)).float()
+        neighbors_patch = torch.from_numpy(np.ascontiguousarray(neighbors_patch)).bool()
         context = torch.from_numpy(np.ascontiguousarray(context)).float()
 
         return img_patch, mask_patch, flow_patch, context, neighbors_patch

@@ -1,12 +1,10 @@
 import os
-import json
 import logging
 import numpy as np
-import torch
 import tifffile as tiff
 from tqdm import tqdm
 from glob import glob
-from tree_seg.network_3D.apply_unet import apply_model  # Import apply_model function
+from tree_seg.network_3D.apply_unet import apply_model  
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -36,9 +34,9 @@ def apply_model_to_folders(data_folder, results_folder, config):
 
         # Define input and output paths
         image_path = os.path.join(subfolder, config["nuclei_name"])
-        seg_output_path = os.path.join(sub_output_folder, "segmentation.tif")
-        flow_output_path = os.path.join(sub_output_folder, "pred_flows.npy")
-        neighbor_output_path = os.path.join(sub_output_folder, "neighbor_preds.npy")
+        seg_output_path = os.path.join(sub_output_folder, config["mask_name"])
+        flow_output_path = os.path.join(sub_output_folder, config["flow_name"])
+        neighbor_output_path = os.path.join(sub_output_folder, config["neighbor_name"])
 
         # Skip processing if segmentation already exists
         if os.path.exists(seg_output_path):
@@ -60,9 +58,9 @@ def apply_model_to_folders(data_folder, results_folder, config):
         # Apply model
         logging.info(f"Processing {data_name}...")
         segmentation, pred_flows, neighbor_preds = apply_model(config, image,profile)
-
+        
         # Save results
-        tiff.imwrite(seg_output_path, segmentation.astype(np.uint8))
+        tiff.imwrite(seg_output_path, segmentation.astype(np.bool))
         np.save(flow_output_path, pred_flows)
         np.save(neighbor_output_path, neighbor_preds)
 
@@ -76,7 +74,7 @@ def main(config):
         config (dict): Configuration settings.
     """
     data_folder = config["data_folder"]
-    results_folder = os.path.join(config["results_folder"], "applied")
+    results_folder = os.path.join(config["results_folder"],'applied_to_gt') 
     os.makedirs(results_folder, exist_ok=True)
 
     logging.info("Starting model application...")
