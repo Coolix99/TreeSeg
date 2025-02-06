@@ -74,7 +74,7 @@ def main(config):
         config (dict): Configuration settings.
     """
     data_folder = config["data_folder"]
-    results_folder = os.path.join(config["results_folder"],'applied_to_gt') 
+    results_folder = config["apply_result_folder"]
     os.makedirs(results_folder, exist_ok=True)
 
     logging.info("Starting model application...")

@@ -7,6 +7,9 @@ from glob import glob
 import tifffile as tiff
 from tree_seg.network_3D.pepare_data import calculateFlow, calculateNeighborConnection  
 from tree_seg.network_3D.train_unet import train_model  
+from tree_seg.core.pre_segmentation import connected_components_3D
+from tree_seg.pipeline.apply_model3d import main as apply_model
+from tree_seg.pipeline.visualize import visualize_results
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -118,7 +121,58 @@ def wrapper_train_model(config):
 
     train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list)
 
-def main(config, preprocess=True, train=True):
+def wrapper_pre_segmentation(config):
+    """
+    Performs pre-segmentation by applying connected components on the mask and flow field.
+
+    Args:
+        config (dict): Configuration dictionary containing input/output paths.
+    """
+    applied_results_folder = os.path.join(config["results_folder"], "applied_to_gt")
+    preseg_output_folder = os.path.join(config["results_folder"], "presegmentation")
+    os.makedirs(preseg_output_folder, exist_ok=True)
+
+    subfolders = sorted([f for f in os.listdir(applied_results_folder) if os.path.isdir(os.path.join(applied_results_folder, f))])
+
+    logging.info(f"Found {len(subfolders)} subfolders for pre-segmentation.")
+
+    for subfolder in tqdm(subfolders):
+        subfolder_path = os.path.join(applied_results_folder, subfolder)
+        output_folder = os.path.join(preseg_output_folder, subfolder)
+        os.makedirs(output_folder, exist_ok=True)
+
+        # Define file paths
+        mask_path = os.path.join(subfolder_path, config["mask_name"])
+        flow_path = os.path.join(subfolder_path, config["flow_name"])
+        preseg_output_path = os.path.join(output_folder, "presegmentation.tif")
+
+        # Skip if pre-segmentation already exists
+        if os.path.exists(preseg_output_path):
+            logging.info(f"Skipping {subfolder}, pre-segmentation already exists.")
+            continue
+
+        # Check if required files exist
+        if not os.path.exists(mask_path) or not os.path.exists(flow_path):
+            logging.warning(f"Skipping {subfolder}, missing mask or flow file.")
+            continue
+
+        # Load mask and flow
+        mask = tiff.imread(mask_path) > 0  # Convert to binary mask
+        flow = np.load(flow_path)  # Shape: (3, D, H, W)
+
+        # Compute connected components (pre-segmentation)
+        labels = connected_components_3D(mask, flow)
+
+        # Save pre-segmented labels
+        tiff.imwrite(preseg_output_path, labels.astype(np.uint16))
+        logging.info(f"✅ Pre-segmentation saved for {subfolder} in {preseg_output_path}")
+    
+    logging.info("✅ Pre-segmentation process completed for all subfolders.")
+     
+def wrapper_compute_statistics(config):
+    #todo
+
+def main(config, preprocess=True, train=True, apply=True, vis=False, preseg=True, stat_estimates=True):
     """
     Main pipeline to preprocess 3D data and train UNet3D.
 
@@ -138,7 +192,25 @@ def main(config, preprocess=True, train=True):
         # Train the model
         logging.info("Starting training...")
         wrapper_train_model(config)
-
         logging.info("✅ Training complete. Model saved in results folder.")
    
+    if apply:
+        # Apply the trained model
+        logging.info("Starting model application...")
+        config["apply_result_folder"]= os.path.join(config["results_folder"],'applied_to_gt') 
+        apply_model(config)
 
+    if vis:
+        # Visualize results
+        logging.info("Starting visualization...")
+        visualize_results(config)
+    
+    if preseg:
+        # Pre-segmentation
+        logging.info("Starting pre-segmentation...")
+        wrapper_pre_segmentation(config)
+
+    if stat_estimates:
+        # Compute statistics
+        logging.info("Starting statistics estimation...")
+        wrapper_compute_statistics(config)
