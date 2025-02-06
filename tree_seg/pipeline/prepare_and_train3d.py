@@ -170,6 +170,7 @@ def wrapper_pre_segmentation(config):
     logging.info("✅ Pre-segmentation process completed for all subfolders.")
      
 def wrapper_compute_statistics(config):
+    return
     #todo
 
 def main(config, preprocess=True, train=True, apply=True, vis=False, preseg=True, stat_estimates=True):
