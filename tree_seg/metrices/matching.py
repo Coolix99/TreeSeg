@@ -34,9 +34,14 @@ def match_labels(y_true, y_pred, method="1:1", criterion="iou", thresh=0.5):
         List of matched label pairs as (true_label, pred_label) tuples.
     """
     # Compute the overlap matrix
+    print(y_true.shape,y_pred.shape)
+    print(y_true.dtype,y_pred.dtype)
     overlap = label_overlap(y_true, y_pred, check=False)
+    print(overlap.shape)
+    print(overlap.dtype)
     scores = matching_criteria[criterion](overlap)
-    
+    print(scores.shape)
+    print(scores.dtype)
     # Ignore background
     scores = scores[1:, 1:]  # Remove background from consideration
 
