@@ -54,7 +54,7 @@ def apply_model(config, image, profile):
     model = UNet3D(n_channels=1, context_size=config["context_size"], patch_size=config["patch_size"]).to(device)
 
     # Correct way to load weights
-    checkpoint = torch.load(config["model_path"], map_location=device)  
+    checkpoint = torch.load(config["model_path"], map_location=device, weights_only=True)  
     model.load_state_dict(checkpoint["model_state_dict"])  # Correct loading
 
     model.eval()

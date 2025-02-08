@@ -163,12 +163,12 @@ def calculateNeighborConnection(mask):
         same_object = (mask == shifted_mask) & (mask > 0)  # Ignore background (0)
         
         # Set false connectivity where shifting caused out-of-bounds artifacts
-        if dz == -1: same_object[0, :, :] = 0
-        if dz == 1:  same_object[-1, :, :] = 0
-        if dy == -1: same_object[:, 0, :] = 0
-        if dy == 1:  same_object[:, -1, :] = 0
-        if dx == -1: same_object[:, :, 0] = 0
-        if dx == 1:  same_object[:, :, -1] = 0
+        if dz == -1: same_object[0, :, :] = (mask[0,:,:] > 0)
+        if dz == 1:  same_object[-1, :, :] = (mask[-1,:,:] > 0)
+        if dy == -1: same_object[:, 0, :] = (mask[:,0,:] > 0)
+        if dy == 1:  same_object[:, -1, :] = (mask[:,-1,:] > 0)
+        if dx == -1: same_object[:, :, 0] = (mask[:,:,0] > 0)
+        if dx == 1:  same_object[:, :, -1] = (mask[:,:,-1] > 0)
         
         # Store result in the corresponding channel
         connectivity[i] = same_object

@@ -5,176 +5,105 @@ import torch
 from tqdm import tqdm
 from glob import glob
 import tifffile as tiff
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
+import pickle
+
 from tree_seg.network_3D.pepare_data import calculateFlow, calculateNeighborConnection  
 from tree_seg.network_3D.train_unet import train_model  
 from tree_seg.core.pre_segmentation import connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
 from tree_seg.pipeline.visualize import visualize_results
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
-import pandas as pd
 from tree_seg.metrices.matching import match_labels
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-def preprocess_and_cache(data_folder, output_folder, config):
-    """
-    Preprocess ground truth masks and store computed flows and neighbor connectivity.
+ 
+### 🔹 COMMON UTILITY FUNCTIONS
 
-    Args:
-        data_folder (str): Path to the folder containing subfolders with segmented masks.
-        output_folder (str): Path where precomputed data should be stored.
-        config (dict): Configuration for training.
+def check_required_files(file_paths, subfolder):
+    """Checks if all required files exist before processing."""
+    missing_files = [p for p in file_paths if not os.path.exists(p)]
+    if missing_files:
+        logging.warning(f"Skipping {subfolder}, missing files: {missing_files}")
+        return False
+    return True
 
-    Returns:
-        dict: Paths to precomputed datasets for each subfolder.
-    """
-    os.makedirs(output_folder, exist_ok=True)
+def fit_and_save_kde(data, filename, results_folder):
+    """Fits a KDE model and saves it as a pickle file."""
+    if len(data) == 0:
+        logging.warning(f"Skipping KDE fitting for {filename}, empty dataset.")
+        return None
 
-    subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
-    dataset_paths = {}
-
-    logging.info(f"Found {len(subfolders)} subfolders to process.")
-
-    for subfolder in tqdm(subfolders):
-        if not os.path.isdir(subfolder):
-            continue  # Skip non-directory files
-
-        data_name = os.path.basename(subfolder)
-        sub_output_folder = os.path.join(output_folder, data_name)
-        os.makedirs(sub_output_folder, exist_ok=True)
-
-        mask_path = os.path.join(subfolder, config["mask_name"])
-
-        cache_paths = {
-            "flows": os.path.join(sub_output_folder, "flows.npy"),
-            "neighbors": os.path.join(sub_output_folder, "neighbors.npy"),
-        }
-
-        # Skip if already computed
-        if all(os.path.exists(path) for path in cache_paths.values()):
-            logging.info(f"Skipping {data_name}, precomputed data found.")
-            dataset_paths[data_name] = cache_paths
-            continue
-
-
-        mask = tiff.imread(mask_path)
-
-        # Compute flow & neighbor connectivity
-        flow = calculateFlow(mask)
-        neighbors = calculateNeighborConnection(torch.tensor(mask)).cpu().numpy()
-
-
-        # Save precomputed data
-        np.save(cache_paths["flows"], flow)
-        np.save(cache_paths["neighbors"], neighbors)
-
-        dataset_paths[data_name] = cache_paths  # Store paths for this subfolder
-
-    logging.info("✅ Preprocessing completed. Data cached for all subfolders.")
-    return dataset_paths
-
-def wrapper_train_model(config):
-    data_folder = config["data_folder"]
-    results_folder = os.path.join(config["results_folder"], "precomputed")
-
-    mask_name = config["mask_name"]
-    nuclei_name = config["nuclei_name"]
-    profile_name = config["profile_name"]
-
-    # Collect all data
-    masks_list, nuclei_list, profiles_list, flows_list, neighbors_list = [], [], [], [], []
-
-    subfolders = sorted([f for f in os.listdir(data_folder) if os.path.isdir(os.path.join(data_folder, f))])
-
-    for subfolder in subfolders:
-        data_path = os.path.join(data_folder, subfolder)
-        result_path = os.path.join(results_folder, subfolder)
-
-        mask_path = os.path.join(data_path, mask_name)
-        nuclei_path = os.path.join(data_path, nuclei_name)
-        profile_path = os.path.join(data_path, profile_name)
-
-        flow_path = os.path.join(result_path, "flows.npy")
-        neighbor_path = os.path.join(result_path, "neighbors.npy")
-
-        if not all(os.path.exists(p) for p in [mask_path, nuclei_path, profile_path, flow_path, neighbor_path]):
-            print(f"Skipping {subfolder}, missing required files.")
-            continue
-
-        # Load data
-        mask = tiff.imread(mask_path)>0
-        nuclei = tiff.imread(nuclei_path)
-        profile = np.load(profile_path)
-        flow = np.load(flow_path)
-        neighbors = np.load(neighbor_path)
-
-        # Validate profile shape matches context size
-        if profile.shape[-1] != config["context_size"]:
-            raise ValueError(f"Profile shape mismatch in {subfolder}: Expected {config['context_size']}, got {profile.shape[-1]}")
-
-        # Store data
-        masks_list.append(mask)
-        nuclei_list.append(nuclei)
-        profiles_list.append(profile)
-        flows_list.append(flow)
-        neighbors_list.append(neighbors)
-
-    config["checkpoint_dir"]=os.path.join(config["results_folder"], "checkpoints")
-
-    train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list)
-
-def wrapper_pre_segmentation(config):
-    """
-    Performs pre-segmentation by applying connected components on the mask and flow field.
-
-    Args:
-        config (dict): Configuration dictionary containing input/output paths.
-    """
-    applied_results_folder = os.path.join(config["results_folder"], "applied_to_gt")
-    preseg_output_folder = os.path.join(config["results_folder"], "presegmentation")
-    os.makedirs(preseg_output_folder, exist_ok=True)
-
-    subfolders = sorted([f for f in os.listdir(applied_results_folder) if os.path.isdir(os.path.join(applied_results_folder, f))])
-
-    logging.info(f"Found {len(subfolders)} subfolders for pre-segmentation.")
-
-    for subfolder in tqdm(subfolders):
-        subfolder_path = os.path.join(applied_results_folder, subfolder)
-        output_folder = os.path.join(preseg_output_folder, subfolder)
-        os.makedirs(output_folder, exist_ok=True)
-
-        # Define file paths
-        mask_path = os.path.join(subfolder_path, config["mask_name"])
-        flow_path = os.path.join(subfolder_path, config["flow_name"])
-        preseg_output_path = os.path.join(output_folder, "presegmentation.tif")
-
-        # Skip if pre-segmentation already exists
-        if os.path.exists(preseg_output_path):
-            logging.info(f"Skipping {subfolder}, pre-segmentation already exists.")
-            continue
-
-        # Check if required files exist
-        if not os.path.exists(mask_path) or not os.path.exists(flow_path):
-            logging.warning(f"Skipping {subfolder}, missing mask or flow file.")
-            continue
-
-        # Load mask and flow
-        mask = tiff.imread(mask_path) > 0  # Convert to binary mask
-        flow = np.load(flow_path)  # Shape: (3, D, H, W)
-
-        # Compute connected components (pre-segmentation)
-        labels = connected_components_3D(mask, flow)
-
-        # Save pre-segmented labels
-        tiff.imwrite(preseg_output_path, labels.astype(np.uint16))
-        logging.info(f"✅ Pre-segmentation saved for {subfolder} in {preseg_output_path}")
+    kde = gaussian_kde(data)
+    kde_path = os.path.join(results_folder, filename)
     
-    logging.info("✅ Pre-segmentation process completed for all subfolders.")
-     
+    with open(kde_path, 'wb') as f:
+        pickle.dump(kde, f)
+    
+    logging.info(f"📁 Saved KDE model: {kde_path}")
+    return kde
 
+def plot_distribution(data, kde, title, color, save_path):
+    """Plots histogram and KDE curve, saves the plot."""
+    if len(data) == 0 or kde is None:
+        logging.warning(f"Skipping {title}, missing data or KDE.")
+        return
+    
+    x_vals = np.linspace(min(data), max(data), 200)
+    kde_vals = kde(x_vals)
 
-def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_threshold=0.3):
+    plt.figure(figsize=(8, 5))
+    plt.hist(data, bins=30, density=True, alpha=0.5, color=color, edgecolor='black', label='Histogram')
+    plt.plot(x_vals, kde_vals, color=color, linewidth=2, label='KDE Curve')
+    
+    plt.yscale('log')  # Enable log scale
+    plt.title(title)
+    plt.xlabel("Value")
+    plt.ylabel("Density (log scale)")
+    plt.legend()
+    plt.grid(True)
+
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    logging.info(f"📊 Saved {title} plot as {save_path}")
+
+def calculateBoundaryConnection(mask):
+    """
+    Calculates neighbor connectivity in a 3D mask.
+    
+    Args:
+        mask (torch.Tensor): 3D tensor of shape (D, H, W) representing labeled masks.
+        
+    Returns:
+        torch.Tensor: 6-channel binary tensor (6, D, H, W) indicating connectivity.
+    """
+    device = mask.device
+    D, H, W = mask.shape
+
+    # Initialize empty tensor for neighbor connectivity (6 directions)
+    connectivity = torch.zeros((6, D, H, W), dtype=torch.uint8, device=device)
+
+    # Define shifts in 6 directions (z, y, x) -> (depth, height, width)
+    shifts = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)]
+
+    # Iterate over shifts
+    for i, (dz, dy, dx) in enumerate(shifts):
+        shifted_mask = torch.roll(mask, shifts=(dz, dy, dx), dims=(0, 1, 2))
+        
+        # Check if the voxel has the same label as its shifted neighbor
+        other_label = (mask != shifted_mask) & (mask > 0) & (shifted_mask > 0) # Ignore background (0)
+    
+        
+        # Store result in the corresponding channel
+        connectivity[i] = other_label
+
+    return connectivity
+
+def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_threshold=0.25):
     """
     Compute statistics comparing ground truth segmentation with presegmentation.
     
@@ -224,63 +153,291 @@ def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_
         "avg_gt_size": [np.mean(gt_sizes) if gt_sizes else 0],
         "avg_preseg_size": [np.mean(preseg_sizes) if preseg_sizes else 0]
     }
-    
-    return pd.DataFrame(stats)
 
-def wrapper_compute_statistics(config):
-    """
-    Computes statistics for all datasets and stores the results.
+    boundaries_preseg = calculateBoundaryConnection(torch.tensor(presegmentation)).cpu().numpy()
     
+    matched_relabel = np.zeros_like(presegmentation)
+    offset = len(preseg_labels)
+    for gt, pre in matched_pairs:
+        matched_relabel[presegmentation == pre] = gt + offset
+    boundaries_matched = calculateBoundaryConnection(torch.tensor(matched_relabel)).cpu().numpy()
+    
+   
+    true_boundaries=np.where(boundaries_matched) 
+    false_boundaries = np.where((boundaries_preseg == 1) & (boundaries_matched == 0))
+
+    true_neighbor_values=neighbors[true_boundaries]
+    false_neighbor_values = neighbors[false_boundaries]
+
+    true_flow_vecs=flow[:,true_boundaries[1],true_boundaries[2],true_boundaries[3]]
+    false_flow_vecs=flow[:,false_boundaries[1],false_boundaries[2],false_boundaries[3]]
+
+    coefficients = np.array([
+        [-1, 0, 0],  # For value 0
+        [1, 0, 0],   # For value 1
+        [0, -1, 0],  # For value 2
+        [0, 1, 0],   # For value 3
+        [0, 0, -1],  # For value 4
+        [0, 0, 1]    # For value 5
+    ])
+
+    true_flow_cos = np.sum(coefficients[true_boundaries[0]].T * true_flow_vecs,axis=0)
+    false_flow_cos = np.sum(coefficients[false_boundaries[0]].T * false_flow_vecs,axis=0)
+
+ 
+    return pd.DataFrame(stats),true_neighbor_values,false_neighbor_values,true_flow_cos,false_flow_cos
+
+
+### 🔹 WRAPPER FUNCTIONS
+
+def preprocess_and_cache(data_folder, output_folder, config):
+    """
+    Preprocess masks and store computed flows and neighbor connectivity.
+
     Args:
-        config (dict): Configuration dictionary with paths.
+        data_folder (str): Path to the folder containing subfolders with segmented masks.
+        output_folder (str): Path where precomputed data should be stored.
+        config (dict): Configuration for training. Should contain:
+            - "mask_name": Filename of the mask.
+            - "force_recompute": Whether to overwrite existing results (default: False).
+
+    Returns:
+        dict: Paths to precomputed datasets for each subfolder.
+    """
+    os.makedirs(output_folder, exist_ok=True)
+    subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
+    dataset_paths = {}
+
+    logging.info(f"Found {len(subfolders)} subfolders to process.")
+    force_recompute = config.get("force_recompute", False)
+
+    for subfolder in tqdm(subfolders):
+        if not os.path.isdir(subfolder):
+            continue  # Skip non-directory files
+
+        data_name = os.path.basename(subfolder)
+        sub_output_folder = os.path.join(output_folder, data_name)
+        os.makedirs(sub_output_folder, exist_ok=True)
+
+        mask_path = os.path.join(subfolder, config["mask_name"])
+        cache_paths = {
+            "flows": os.path.join(sub_output_folder, "flows.npy"),
+            "neighbors": os.path.join(sub_output_folder, "neighbors.npy"),
+        }
+
+        # **Skip if already computed and force_recompute=False**
+        if not force_recompute and all(os.path.exists(path) for path in cache_paths.values()):
+            logging.info(f"Skipping {data_name}, precomputed data found.")
+            dataset_paths[data_name] = cache_paths
+            continue
+
+        if not check_required_files([mask_path], data_name):
+            continue
+
+        # Compute and save results
+        mask = tiff.imread(mask_path)
+        np.save(cache_paths["flows"], calculateFlow(mask))
+        np.save(cache_paths["neighbors"], calculateNeighborConnection(torch.tensor(mask)).cpu().numpy())
+
+        dataset_paths[data_name] = cache_paths  
+
+    logging.info("✅ Preprocessing completed. Data cached for all subfolders.")
+    return dataset_paths
+
+def train_and_save_model(config):
+    """
+    Trains the UNet3D model and saves results if no existing trained model is found.
+
+    Args:
+        config (dict): Configuration dictionary containing:
+            - "data_folder": Path to the dataset.
+            - "results_folder": Path for storing results.
+            - "mask_name": Filename of the mask file.
+            - "nuclei_name": Filename of the nuclei file.
+            - "profile_name": Filename of the profile file.
+            - "force_recompute": Whether to overwrite existing model checkpoints (default: False).
+    """
+    data_folder = config["data_folder"]
+    results_folder = os.path.join(config["results_folder"], "precomputed")
+    checkpoint_dir = os.path.join(config["results_folder"], "checkpoints")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # **Check if a trained model already exists**
+    checkpoint_path = os.path.join(checkpoint_dir, "model_best.pth")  # Assuming PyTorch model
+    force_recompute = config.get("force_recompute", False)
+
+    if not force_recompute and os.path.exists(checkpoint_path):
+        logging.info(f"Skipping training. Model checkpoint already exists at {checkpoint_path}")
+        return
+
+    masks, nuclei, profiles, flows, neighbors = [], [], [], [], []
+
+    for subfolder in sorted(os.listdir(data_folder)):
+        data_path = os.path.join(data_folder, subfolder)
+        result_path = os.path.join(results_folder, subfolder)
+
+        required_files = {
+            "mask": os.path.join(data_path, config["mask_name"]),
+            "nuclei": os.path.join(data_path, config["nuclei_name"]),
+            "profile": os.path.join(data_path, config["profile_name"]),
+            "flow": os.path.join(result_path, "flows.npy"),
+            "neighbors": os.path.join(result_path, "neighbors.npy"),
+        }
+
+        if not check_required_files(required_files.values(), subfolder):
+            continue  # Skip this subfolder if any file is missing
+
+        # Load and store data
+        masks.append(tiff.imread(required_files["mask"]) > 0)
+        nuclei.append(tiff.imread(required_files["nuclei"]))
+        profiles.append(np.load(required_files["profile"]))
+        flows.append(np.load(required_files["flow"]))
+        neighbors.append(np.load(required_files["neighbors"]))
+
+    # Train the model
+    logging.info("Starting UNet3D training...")
+    config["checkpoint_dir"] = checkpoint_dir
+    train_model(config, masks, nuclei, profiles, flows, neighbors)
+    logging.info(f"✅ Training complete. Model saved in {checkpoint_dir}")
+
+def run_pre_segmentation(config):
+    """
+    Performs pre-segmentation by applying connected components on the mask and flow field.
+
+    Args:
+        config (dict): Configuration dictionary containing:
+            - "results_folder": Base output directory.
+            - "mask_name": Filename of the mask file.
+            - "flow_name": Filename of the flow field file.
+            - "force_recompute": Whether to overwrite existing pre-segmentation results (default: False).
+    """
+    applied_results_folder = os.path.join(config["results_folder"], "applied_to_gt")
+    preseg_output_folder = os.path.join(config["results_folder"], "presegmentation")
+    os.makedirs(preseg_output_folder, exist_ok=True)
+
+    subfolders = sorted([f for f in os.listdir(applied_results_folder) if os.path.isdir(os.path.join(applied_results_folder, f))])
+    force_recompute = config.get("force_recompute", False)
+
+    logging.info(f"Found {len(subfolders)} subfolders for pre-segmentation.")
+
+    for subfolder in tqdm(subfolders, desc="Pre-segmentation"):
+        subfolder_path = os.path.join(applied_results_folder, subfolder)
+        output_folder = os.path.join(preseg_output_folder, subfolder)
+        os.makedirs(output_folder, exist_ok=True)
+
+        # Define file paths
+        mask_path = os.path.join(subfolder_path, config["mask_name"])
+        flow_path = os.path.join(subfolder_path, config["flow_name"])
+        preseg_output_path = os.path.join(output_folder, "presegmentation.tif")
+
+        # **Skip computation if results exist and force_recompute=False**
+        if not force_recompute and os.path.exists(preseg_output_path):
+            logging.info(f"Skipping {subfolder}, pre-segmentation already exists.")
+            continue
+
+        # Check if required files exist
+        if not check_required_files([mask_path, flow_path], subfolder):
+            continue
+
+        # Load mask and flow
+        mask = tiff.imread(mask_path) > 0  # Convert to binary mask
+        flow = np.load(flow_path)  # Shape: (3, D, H, W)
+
+        # Compute connected components (pre-segmentation)
+        labels = connected_components_3D(mask, flow)
+
+        # Save pre-segmented labels
+        tiff.imwrite(preseg_output_path, labels.astype(np.uint16))
+        logging.info(f"✅ Pre-segmentation saved for {subfolder} in {preseg_output_path}")
+    
+    logging.info("✅ Pre-segmentation process completed for all subfolders.")
+
+def compute_and_save_statistics(config, plot=False):
+    """
+    Computes and saves dataset statistics, including KDE models.
+
+    Args:
+        config (dict): Configuration dictionary containing:
+            - "results_folder": Base output directory.
+            - "data_folder": Path to dataset.
+            - "mask_name": Filename of the mask file.
+            - "force_recompute": Whether to overwrite existing statistics (default: False).
+        plot (bool): Whether to generate and save KDE plots.
     """
     results_folder = os.path.join(config["results_folder"], "statistics")
     os.makedirs(results_folder, exist_ok=True)
 
-    preseg_folder = os.path.join(config["results_folder"], "presegmentation")
-    data_folder = config["data_folder"]
-    precomputed_folder = os.path.join(config["results_folder"], "precomputed")
+    # **Check if statistics already exist**
+    stats_file = os.path.join(results_folder, "statistics_summary.csv")
+    force_recompute = config.get("force_recompute", False)
 
+    if not force_recompute and os.path.exists(stats_file):
+        logging.info(f"Skipping statistics computation. Existing file found: {stats_file}")
+        return
+
+    preseg_folder = os.path.join(config["results_folder"], "presegmentation")
+    applied_to_gt_folder = os.path.join(config["results_folder"], 'applied_to_gt')
+
+    all_data = {"true_neighbors": [], "false_neighbors": [], "true_flow_cos": [], "false_flow_cos": []}
     all_stats = []
 
-    subfolders = sorted([f for f in os.listdir(preseg_folder) if os.path.isdir(os.path.join(preseg_folder, f))])
-    logging.info(f"Computing statistics for {len(subfolders)} datasets.")
+    for subfolder in sorted(os.listdir(preseg_folder)):
+        gt_path = os.path.join(config["data_folder"], subfolder, config["mask_name"])
+        required_files = {
+            "gt": gt_path,
+            "preseg": os.path.join(preseg_folder, subfolder, "presegmentation.tif"),
+            "neighbors": os.path.join(applied_to_gt_folder, subfolder, "neighbors.npy"),
+            "flows": os.path.join(applied_to_gt_folder, subfolder, "flows.npy"),
+        }
 
-    for subfolder in subfolders:
-        gt_path = os.path.join(data_folder, subfolder, config["mask_name"])
-        preseg_path = os.path.join(preseg_folder, subfolder, "presegmentation.tif")
-        neighbor_path = os.path.join(precomputed_folder, subfolder, "neighbors.npy")
-        flow_path = os.path.join(precomputed_folder, subfolder, "flows.npy")
-
-        if not all(os.path.exists(p) for p in [gt_path, preseg_path, neighbor_path, flow_path]):
-            logging.warning(f"Skipping {subfolder}, missing files.")
-            continue
+        if not check_required_files(required_files.values(), subfolder):
+            continue  # Skip if any required file is missing
 
         # Load data
-        gt_segmentation = tiff.imread(gt_path)
-        presegmentation = tiff.imread(preseg_path)
-        neighbors = np.load(neighbor_path)
-        flow = np.load(flow_path)
+        gt_segmentation = tiff.imread(required_files["gt"])
+        presegmentation = tiff.imread(required_files["preseg"])
+        neighbors = np.load(required_files["neighbors"])
+        flow = np.load(required_files["flows"])
 
         # Compute statistics
-        stats_df = compute_statistics(gt_segmentation, presegmentation, neighbors, flow)
+        stats_df, *data_values = compute_statistics(gt_segmentation, presegmentation, neighbors, flow)
         stats_df.insert(0, "dataset", subfolder)  # Add dataset name
         all_stats.append(stats_df)
 
-       
+        for key, data in zip(all_data.keys(), data_values):
+            all_data[key].append(data)
 
-    # Aggregate and save results
+    # Save final statistics
     if all_stats:
         final_stats = pd.concat(all_stats, ignore_index=True)
-        stats_file = os.path.join(results_folder, "statistics_summary.csv")
         final_stats.to_csv(stats_file, index=False)
         logging.info(f"✅ Statistics saved to {stats_file}")
     else:
-        logging.warning("No statistics were computed.")
+        logging.warning("⚠️ No statistics were computed. Skipping KDE fitting.")
+        return  # Exit early if no data was processed
 
+    # Save KDEs and plots
+    for key, color in zip(all_data.keys(), ["blue", "red", "green", "purple"]):
+        kde_file = os.path.join(results_folder, f"kde_{key}.pkl")
 
+        if not force_recompute and os.path.exists(kde_file):
+            logging.info(f"Skipping KDE fitting for {key}. Existing file found: {kde_file}")
+            continue
 
-def main(config, preprocess=True, train=True, apply=True, vis=False, preseg=True, stat_estimates=True):
+        kde = fit_and_save_kde(np.concatenate(all_data[key]), f"kde_{key}.pkl", results_folder)
+
+        if plot:
+            plot_distribution(
+                np.concatenate(all_data[key]),
+                kde,
+                key.replace("_", " ").title(),
+                color,
+                os.path.join(results_folder, f"{key}.png")
+            )
+
+### 🔹 HOLE PIPELINE
+
+def main(config):
     """
     Main pipeline to preprocess 3D data and train UNet3D.
 
@@ -291,34 +448,308 @@ def main(config, preprocess=True, train=True, apply=True, vis=False, preseg=True
     results_folder = config["results_folder"]
     os.makedirs(results_folder, exist_ok=True)
 
-    if preprocess:
-        # Preprocess and cache data
-        logging.info("Starting preprocessing step...")
-        preprocess_and_cache(data_folder, os.path.join(results_folder, "precomputed"),config)
+    logging.info("Starting preprocessing step...")
+    preprocess_and_cache(data_folder, os.path.join(results_folder, "precomputed"),config)
 
-    if train:
-        # Train the model
-        logging.info("Starting training...")
-        wrapper_train_model(config)
-        logging.info("✅ Training complete. Model saved in results folder.")
+
+    logging.info("Starting training...")
+    train_and_save_model(config)
+    logging.info("✅ Training complete. Model saved in results folder.")
    
-    if apply:
-        # Apply the trained model
-        logging.info("Starting model application...")
-        config["apply_result_folder"]= os.path.join(config["results_folder"],'applied_to_gt') 
-        apply_model(config)
+    logging.info("Starting model application...")
+    config["apply_result_folder"]= os.path.join(config["results_folder"],'applied_to_gt') 
+    apply_model(config)
 
-    if vis:
-        # Visualize results
+    if config.get("visualize", False):
         logging.info("Starting visualization...")
         visualize_results(config)
     
-    if preseg:
-        # Pre-segmentation
-        logging.info("Starting pre-segmentation...")
-        wrapper_pre_segmentation(config)
+    logging.info("Starting pre-segmentation...")
+    run_pre_segmentation(config)
 
-    if stat_estimates:
-        # Compute statistics
-        logging.info("Starting statistics estimation...")
-        wrapper_compute_statistics(config)
+    logging.info("Starting statistics estimation...")
+    compute_and_save_statistics(config,True)
+
+
+# def wrapper_pre_segmentation(config):
+#     """
+#     Performs pre-segmentation by applying connected components on the mask and flow field.
+
+#     Args:
+#         config (dict): Configuration dictionary containing input/output paths.
+#     """
+#     applied_results_folder = os.path.join(config["results_folder"], "applied_to_gt")
+#     preseg_output_folder = os.path.join(config["results_folder"], "presegmentation")
+#     os.makedirs(preseg_output_folder, exist_ok=True)
+
+#     subfolders = sorted([f for f in os.listdir(applied_results_folder) if os.path.isdir(os.path.join(applied_results_folder, f))])
+
+#     logging.info(f"Found {len(subfolders)} subfolders for pre-segmentation.")
+
+#     for subfolder in tqdm(subfolders):
+#         subfolder_path = os.path.join(applied_results_folder, subfolder)
+#         output_folder = os.path.join(preseg_output_folder, subfolder)
+#         os.makedirs(output_folder, exist_ok=True)
+
+#         # Define file paths
+#         mask_path = os.path.join(subfolder_path, config["mask_name"])
+#         flow_path = os.path.join(subfolder_path, config["flow_name"])
+#         preseg_output_path = os.path.join(output_folder, "presegmentation.tif")
+
+#         # Skip if pre-segmentation already exists
+#         if os.path.exists(preseg_output_path):
+#             logging.info(f"Skipping {subfolder}, pre-segmentation already exists.")
+#             continue
+
+#         # Check if required files exist
+#         if not os.path.exists(mask_path) or not os.path.exists(flow_path):
+#             logging.warning(f"Skipping {subfolder}, missing mask or flow file.")
+#             continue
+
+#         # Load mask and flow
+#         mask = tiff.imread(mask_path) > 0  # Convert to binary mask
+#         flow = np.load(flow_path)  # Shape: (3, D, H, W)
+
+#         # Compute connected components (pre-segmentation)
+#         labels = connected_components_3D(mask, flow)
+
+#         # Save pre-segmented labels
+#         tiff.imwrite(preseg_output_path, labels.astype(np.uint16))
+#         logging.info(f"✅ Pre-segmentation saved for {subfolder} in {preseg_output_path}")
+    
+#     logging.info("✅ Pre-segmentation process completed for all subfolders.")
+    
+
+# def preprocess_and_cache(data_folder, output_folder, config):
+#     """
+#     Preprocess ground truth masks and store computed flows and neighbor connectivity.
+
+#     Args:
+#         data_folder (str): Path to the folder containing subfolders with segmented masks.
+#         output_folder (str): Path where precomputed data should be stored.
+#         config (dict): Configuration for training.
+
+#     Returns:
+#         dict: Paths to precomputed datasets for each subfolder.
+#     """
+#     os.makedirs(output_folder, exist_ok=True)
+
+#     subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
+#     dataset_paths = {}
+
+#     logging.info(f"Found {len(subfolders)} subfolders to process.")
+
+#     for subfolder in tqdm(subfolders):
+#         if not os.path.isdir(subfolder):
+#             continue  # Skip non-directory files
+
+#         data_name = os.path.basename(subfolder)
+#         sub_output_folder = os.path.join(output_folder, data_name)
+#         os.makedirs(sub_output_folder, exist_ok=True)
+
+#         mask_path = os.path.join(subfolder, config["mask_name"])
+
+#         cache_paths = {
+#             "flows": os.path.join(sub_output_folder, "flows.npy"),
+#             "neighbors": os.path.join(sub_output_folder, "neighbors.npy"),
+#         }
+
+#         # Skip if already computed
+#         if all(os.path.exists(path) for path in cache_paths.values()):
+#             logging.info(f"Skipping {data_name}, precomputed data found.")
+#             dataset_paths[data_name] = cache_paths
+#             continue
+
+
+#         mask = tiff.imread(mask_path)
+
+#         # Compute flow & neighbor connectivity
+#         flow = calculateFlow(mask)
+#         neighbors = calculateNeighborConnection(torch.tensor(mask)).cpu().numpy()
+
+
+#         # Save precomputed data
+#         np.save(cache_paths["flows"], flow)
+#         np.save(cache_paths["neighbors"], neighbors)
+
+#         dataset_paths[data_name] = cache_paths  # Store paths for this subfolder
+
+#     logging.info("✅ Preprocessing completed. Data cached for all subfolders.")
+#     return dataset_paths
+
+# def wrapper_train_model(config):
+#     data_folder = config["data_folder"]
+#     results_folder = os.path.join(config["results_folder"], "precomputed")
+
+#     mask_name = config["mask_name"]
+#     nuclei_name = config["nuclei_name"]
+#     profile_name = config["profile_name"]
+
+#     # Collect all data
+#     masks_list, nuclei_list, profiles_list, flows_list, neighbors_list = [], [], [], [], []
+
+#     subfolders = sorted([f for f in os.listdir(data_folder) if os.path.isdir(os.path.join(data_folder, f))])
+
+#     for subfolder in subfolders:
+#         data_path = os.path.join(data_folder, subfolder)
+#         result_path = os.path.join(results_folder, subfolder)
+
+#         mask_path = os.path.join(data_path, mask_name)
+#         nuclei_path = os.path.join(data_path, nuclei_name)
+#         profile_path = os.path.join(data_path, profile_name)
+
+#         flow_path = os.path.join(result_path, "flows.npy")
+#         neighbor_path = os.path.join(result_path, "neighbors.npy")
+
+#         if not all(os.path.exists(p) for p in [mask_path, nuclei_path, profile_path, flow_path, neighbor_path]):
+#             print(f"Skipping {subfolder}, missing required files.")
+#             continue
+
+#         # Load data
+#         mask = tiff.imread(mask_path)>0
+#         nuclei = tiff.imread(nuclei_path)
+#         profile = np.load(profile_path)
+#         flow = np.load(flow_path)
+#         neighbors = np.load(neighbor_path)
+
+#         # Validate profile shape matches context size
+#         if profile.shape[-1] != config["context_size"]:
+#             raise ValueError(f"Profile shape mismatch in {subfolder}: Expected {config['context_size']}, got {profile.shape[-1]}")
+
+#         # Store data
+#         masks_list.append(mask)
+#         nuclei_list.append(nuclei)
+#         profiles_list.append(profile)
+#         flows_list.append(flow)
+#         neighbors_list.append(neighbors)
+
+#     config["checkpoint_dir"]=os.path.join(config["results_folder"], "checkpoints")
+
+#     train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neighbors_list)
+
+
+# def wrapper_compute_statistics(config, plot=False):
+#     """
+#     Computes statistics for all datasets, stores results, and optionally plots distributions.
+
+#     Args:
+#         config (dict): Configuration dictionary with paths.
+#         plot (bool): Whether to generate and save plots.
+#     """
+#     results_folder = os.path.join(config["results_folder"], "statistics")
+#     os.makedirs(results_folder, exist_ok=True)
+
+#     preseg_folder = os.path.join(config["results_folder"], "presegmentation")
+#     data_folder = config["data_folder"]
+#     applied_to_gt_folder = os.path.join(config["results_folder"], 'applied_to_gt')
+
+#     all_stats = []
+#     all_true_neighbors = []
+#     all_false_neighbors = []
+#     all_true_flow_cos = []
+#     all_false_flow_cos = []
+
+#     subfolders = sorted([f for f in os.listdir(preseg_folder) if os.path.isdir(os.path.join(preseg_folder, f))])
+#     logging.info(f"Computing statistics for {len(subfolders)} datasets.")
+
+#     for subfolder in subfolders:
+#         logging.info(f"Computing statistics for {subfolder}.")
+#         gt_path = os.path.join(data_folder, subfolder, config["mask_name"])
+#         preseg_path = os.path.join(preseg_folder, subfolder, "presegmentation.tif")
+#         neighbor_path = os.path.join(applied_to_gt_folder, subfolder, "neighbors.npy")
+#         flow_path = os.path.join(applied_to_gt_folder, subfolder, "flows.npy")
+
+#         if not all(os.path.exists(p) for p in [gt_path, preseg_path, neighbor_path, flow_path]):
+#             logging.warning(f"Skipping {subfolder}, missing files.")
+#             continue
+
+#         # Load data
+#         gt_segmentation = tiff.imread(gt_path)
+#         presegmentation = tiff.imread(preseg_path)
+#         neighbors = np.load(neighbor_path)
+#         flow = np.load(flow_path)
+
+#         # Compute statistics
+#         stats_df, true_neighbor_values, false_neighbor_values, true_flow_cos, false_flow_cos = compute_statistics(gt_segmentation, presegmentation, neighbors, flow)
+#         stats_df.insert(0, "dataset", subfolder)  # Add dataset name
+#         all_stats.append(stats_df)
+
+#         all_true_neighbors.append(true_neighbor_values)
+#         all_false_neighbors.append(false_neighbor_values)
+#         all_true_flow_cos.append(true_flow_cos)
+#         all_false_flow_cos.append(false_flow_cos)
+
+#     # Flatten the lists
+#     all_true_neighbors = np.concatenate(all_true_neighbors) if all_true_neighbors else np.array([])
+#     all_false_neighbors = np.concatenate(all_false_neighbors) if all_false_neighbors else np.array([])
+#     all_true_flow_cos = np.concatenate(all_true_flow_cos) if all_true_flow_cos else np.array([])
+#     all_false_flow_cos = np.concatenate(all_false_flow_cos) if all_false_flow_cos else np.array([])
+
+#     # Save distributions for future analysis
+#     np.save(os.path.join(results_folder, "all_true_neighbors.npy"), all_true_neighbors)
+#     np.save(os.path.join(results_folder, "all_false_neighbors.npy"), all_false_neighbors)
+#     np.save(os.path.join(results_folder, "all_true_flow_cos.npy"), all_true_flow_cos)
+#     np.save(os.path.join(results_folder, "all_false_flow_cos.npy"), all_false_flow_cos)
+#     logging.info("📁 Distributions saved as .npy files.")
+
+#     def fit_and_save_kde(data, filename):
+#         """ Fits a KDE model and saves it as a pickle file. """
+#         if len(data) == 0:
+#             logging.warning(f"Skipping KDE fitting for {filename}, empty dataset.")
+#             return None
+
+#         kde = gaussian_kde(data)
+
+#         # Save KDE model
+#         kde_path = os.path.join(results_folder, filename)
+#         with open(kde_path, 'wb') as f:
+#             pickle.dump(kde, f)
+#         logging.info(f"📁 Saved KDE model: {kde_path}")
+
+#         return kde
+
+#     # Fit and save KDEs
+#     kde_true_neighbors = fit_and_save_kde(all_true_neighbors, "kde_true_neighbors.pkl")
+#     kde_false_neighbors = fit_and_save_kde(all_false_neighbors, "kde_false_neighbors.pkl")
+#     kde_true_flow_cos = fit_and_save_kde(all_true_flow_cos, "kde_true_flow_cos.pkl")
+#     kde_false_flow_cos = fit_and_save_kde(all_false_flow_cos, "kde_false_flow_cos.pkl")
+
+#     def plot_distribution(data, kde, title, color, save_path):
+#         if len(data) == 0 or kde is None:
+#             logging.warning(f"Skipping {title}, missing data or KDE.")
+#             return
+        
+#         x_vals = np.linspace(min(data), max(data), 200)
+#         kde_vals = kde(x_vals)
+
+#         plt.figure(figsize=(8, 5))
+#         plt.hist(data, bins=30, density=True, alpha=0.5, color=color, edgecolor='black', label='Histogram')
+#         plt.plot(x_vals, kde_vals, color=color, linewidth=2, label='KDE Curve')
+
+#         plt.yscale('log')  # Enable log scale
+#         plt.title(title)
+#         plt.xlabel("Value")
+#         plt.ylabel("Density (log scale)")
+#         plt.legend()
+#         plt.grid(True)
+        
+#         # Save plot
+#         plt.savefig(save_path, dpi=300)
+#         plt.close()
+#         logging.info(f"📊 Saved {title} plot as {save_path}")
+
+#     # Optional: Plot and save KDE distributions
+#     if plot:
+#         plot_distribution(all_true_neighbors, kde_true_neighbors, "All True Neighbors", "blue", os.path.join(results_folder, "true_neighbors.png"))
+#         plot_distribution(all_false_neighbors, kde_false_neighbors, "All False Neighbors", "red", os.path.join(results_folder, "false_neighbors.png"))
+#         plot_distribution(all_true_flow_cos, kde_true_flow_cos, "All True Flow Cos", "green", os.path.join(results_folder, "true_flow_cos.png"))
+#         plot_distribution(all_false_flow_cos, kde_false_flow_cos, "All False Flow Cos", "purple", os.path.join(results_folder, "false_flow_cos.png"))
+
+#     # Aggregate and save statistics
+#     if all_stats:
+#         final_stats = pd.concat(all_stats, ignore_index=True)
+#         stats_file = os.path.join(results_folder, "statistics_summary.csv")
+#         final_stats.to_csv(stats_file, index=False)
+#         logging.info(f"✅ Statistics saved to {stats_file}")
+#     else:
+#         logging.warning("⚠️ No statistics were computed.")

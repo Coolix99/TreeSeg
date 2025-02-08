@@ -18,6 +18,8 @@ def apply_model_to_folders(data_folder, results_folder, config):
         results_folder (str): Path where processed results should be stored.
         config (dict): Configuration for applying the model.
     """
+    force_recompute = config.get("force_recompute", False)
+
     os.makedirs(results_folder, exist_ok=True)
 
     subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
@@ -39,7 +41,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
         neighbor_output_path = os.path.join(sub_output_folder, config["neighbor_name"])
 
         # Skip processing if segmentation already exists
-        if os.path.exists(seg_output_path):
+        if os.path.exists(seg_output_path) and not force_recompute:
             logging.info(f"Skipping {data_name}, results already exist.")
             continue
 
