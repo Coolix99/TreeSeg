@@ -108,14 +108,14 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
 
         seg_logits, pred_flows, neighbor_logits = model(images, prof)
 
-        mask = images > 0  # Mask based on valid image regions
-
+        mask_seg = images > 0  # Mask based on valid image regions
+        mask_flow_neighbor = masks > 0
         # Compute losses
-        loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask, criterion)
-        loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask, criterion)
-        # loss_segmentation = dice_loss(seg_logits, masks, mask)
-        # loss_neighbors = dice_loss(neighbor_logits, neighbors, mask)
-        loss_flow = angle_loss(pred_flows, flows, mask)
+        loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask_seg, criterion)
+        loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask_flow_neighbor, criterion)
+        # loss_segmentation = dice_loss(seg_logits, masks, mask_seg)
+        # loss_neighbors = dice_loss(neighbor_logits, neighbors, mask_flow_neighbor)
+        loss_flow = angle_loss(pred_flows, flows, mask_flow_neighbor)
 
         loss = loss_segmentation + loss_flow + loss_neighbors
 
@@ -139,12 +139,14 @@ def validate_one_epoch(model, val_loader, criterion, device):
             masks = masks.unsqueeze(1)  
             seg_logits, pred_flows, neighbor_logits = model(images, prof)
 
-            mask = images > 0
-
+            mask_seg = images > 0  # Mask based on valid image regions
+            mask_flow_neighbor = masks > 0
             # Compute losses
-            loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask, criterion)
-            loss_flow = angle_loss(pred_flows, flows, mask)
-            loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask, criterion)
+            loss_segmentation = masked_cross_entropy_loss(seg_logits, masks, mask_seg, criterion)
+            loss_neighbors = masked_cross_entropy_loss(neighbor_logits, neighbors, mask_flow_neighbor, criterion)
+            # loss_segmentation = dice_loss(seg_logits, masks, mask_seg)
+            # loss_neighbors = dice_loss(neighbor_logits, neighbors, mask_flow_neighbor)
+            loss_flow = angle_loss(pred_flows, flows, mask_flow_neighbor)
 
             loss = loss_segmentation + loss_flow + loss_neighbors
 

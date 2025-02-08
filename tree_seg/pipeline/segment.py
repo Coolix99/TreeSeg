@@ -4,11 +4,13 @@ import numpy as np
 from tqdm import tqdm
 import tifffile as tiff
 import pickle
+from scipy.interpolate import interp1d
 
 from tree_seg.core.pre_segmentation import connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
 from tree_seg.pipeline.visualize import visualize_results
-from tree_seg.core.segmentation import construct_segmentation_graph
+from tree_seg.core.segmentation import construct_segmentation_graph,construct_threshold_segmentation
+from tree_seg.metrices.label_operations import relabel_sequentially_3D
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -23,6 +25,16 @@ def check_required_files(file_paths, subfolder):
         logging.warning(f"Skipping {subfolder}, missing files: {missing_files}")
         return False
     return True
+
+def kde_to_interpolator(kde, num_points=200):
+    """Precompute KDE values and create an interpolated function for fast lookup."""
+    x_grid = np.linspace(kde.dataset.min(), kde.dataset.max(), num_points)
+    kde_values = kde.pdf(x_grid)
+
+    # Create an interpolator
+    interpolator = interp1d(x_grid, kde_values, kind="linear", fill_value=(kde_values[0], kde_values[-1]), bounds_error=False)
+    return interpolator
+
 
 ### 🔹 INFERENCE PIPELINE FUNCTIONS
 
@@ -96,6 +108,23 @@ def load_and_prepare_segmentation(config):
     os.makedirs(final_segmentation_folder, exist_ok=True)
     force_recompute = config.get("force_recompute", False)
 
+    # Load KDE models
+    kde_paths = {
+        "true_neighbors": os.path.join(statistics_folder, "kde_true_neighbors.pkl"),
+        "false_neighbors": os.path.join(statistics_folder, "kde_false_neighbors.pkl"),
+        "true_flow_cos": os.path.join(statistics_folder, "kde_true_flow_cos.pkl"),
+        "false_flow_cos": os.path.join(statistics_folder, "kde_false_flow_cos.pkl"),
+    }
+
+    kde_models = {}
+    for key, path in kde_paths.items():
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                kde_models[key] = kde_to_interpolator(pickle.load(f))
+            logging.info(f"✅ Loaded KDE model: {key}")
+        else:
+            logging.warning(f"⚠️ Missing KDE model: {key}, some logic may not work as expected.")
+
     subfolders = sorted([f for f in os.listdir(preseg_folder) if os.path.isdir(os.path.join(preseg_folder, f))])
     logging.info(f"Found {len(subfolders)} subfolders for final segmentation.")
 
@@ -120,26 +149,26 @@ def load_and_prepare_segmentation(config):
         flow = np.load(flow_path)
         neighbors = np.load(neighbors_path)
 
-        # Load KDE models
-        kde_paths = {
-            "true_neighbors": os.path.join(statistics_folder, "kde_true_neighbors.pkl"),
-            "false_neighbors": os.path.join(statistics_folder, "kde_false_neighbors.pkl"),
-            "true_flow_cos": os.path.join(statistics_folder, "kde_true_flow_cos.pkl"),
-            "false_flow_cos": os.path.join(statistics_folder, "kde_false_flow_cos.pkl"),
-        }
+        
 
-        kde_models = {}
-        for key, path in kde_paths.items():
-            if os.path.exists(path):
-                with open(path, "rb") as f:
-                    kde_models[key] = pickle.load(f)
-                logging.info(f"✅ Loaded KDE model: {key}")
-            else:
-                logging.warning(f"⚠️ Missing KDE model: {key}, some logic may not work as expected.")
+        preseg_mask = relabel_sequentially_3D(preseg_mask)
+        graph, edge_probabilities=construct_segmentation_graph(preseg_mask.copy(),flow,neighbors,kde_models)
+        threshold_segmentation_01=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.01)
+        threshold_segmentation_05=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.5)
+        
+        import napari
+        viewer=napari.Viewer()
+        viewer.add_labels(threshold_segmentation_05,name='thr_seg 05')
+        viewer.add_labels(threshold_segmentation_01,name='thr_seg 01')
+        viewer.add_labels(preseg_mask,name='preseg')
+        napari.run()
 
-        construct_segmentation_graph(preseg_mask,flow,neighbors,kde_models)
 
     logging.info("✅ Segmentation data loaded and prepared.")
+
+
+
+
 
 
 ### 🔹 HOLE PIPELINE

@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import higra as hg
 import matplotlib.pyplot as plt
-from tree_seg.metrices.label_operations import relabel_sequentially_3D
+
 from tree_seg.core.neighbor_calculations import calculateBoundaryConnection
 
 def construct_connection_graph(preseg_mask, flow, neighbors):
@@ -21,7 +21,6 @@ def construct_connection_graph(preseg_mask, flow, neighbors):
         dict: Dictionary mapping edge (segment1, segment2) -> {neighbor_values, flow_cos_values}.
     """
     # Ensure labels are consecutive
-    preseg_mask = relabel_sequentially_3D(preseg_mask)
     unique_labels = np.unique(preseg_mask)[1:]  # Exclude background (0)
 
     # Compute boundary connectivity (6-channel binary tensor)
@@ -107,37 +106,38 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models):
         hg.UndirectedGraph: The region adjacency graph (RAG) with probabilities assigned.
         dict: Dictionary mapping edge (segment1, segment2) -> probability p(true).
     """
-    # Step 1: Build adjacency graph and extract edge information
+    # Build adjacency graph and extract edge information
     graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
     
     edge_probabilities = {}  # Store P(true) for each edge
     all_probabilities = []   # Store probabilities for visualization
 
-    # Step 2: Iterate over all edges
+
+    # Iterate over all edges
     for edge, values in edge_values.items():
         neighbor_values = values["neighbor_values"]
         flow_cos_values = values["flow_cos_values"]
 
-        # Compute likelihoods using KDE models
-        L_true_neighbors = kde_models["true_neighbors"].pdf(neighbor_values)
-        L_false_neighbors = kde_models["false_neighbors"].pdf(neighbor_values)
-
-        L_true_flow_cos = kde_models["true_flow_cos"].pdf(flow_cos_values)
-        L_false_flow_cos = kde_models["false_flow_cos"].pdf(flow_cos_values)
-
-        # Multiply along the boundary pixels
+        L_true_neighbors = kde_models["true_neighbors"](neighbor_values)
+        L_false_neighbors = kde_models["false_neighbors"](neighbor_values)
+        L_true_flow_cos = kde_models["true_flow_cos"](flow_cos_values)
+        L_false_flow_cos = kde_models["false_flow_cos"](flow_cos_values)
+        # print(L_true_neighbors.max(),L_true_neighbors.min())
+        # print(L_false_neighbors.max(),L_false_neighbors.min())
+        # print(L_true_flow_cos.max(),L_true_flow_cos.min())
+        # print(L_false_flow_cos.max(),L_false_flow_cos.min())
+        # print('---------')
         L_true = np.prod(L_true_neighbors) * np.prod(L_true_flow_cos)
         L_false = np.prod(L_false_neighbors) * np.prod(L_false_flow_cos)
-
-        # Normalize probabilities to ensure p(true) + p(false) = 1
+        #print((L_true_flow_cos/L_false_flow_cos).max(),(L_true_flow_cos/L_false_flow_cos).min())
         P_true = L_true / (L_true + L_false)
-        
+
         edge_probabilities[edge] = P_true
         all_probabilities.append(P_true)
 
-    # Step 3: Plot histogram of P(true) distribution
+    # Plot histogram of P(true) distribution
     plt.figure(figsize=(8, 5))
-    plt.hist(all_probabilities, bins=30, density=True, alpha=0.7, color='blue', edgecolor='black')
+    plt.hist(all_probabilities, bins=500, density=True, alpha=0.7, color='blue', edgecolor='black')
     plt.xlabel("P(True) for Segment Connections")
     plt.ylabel("Density")
     plt.title("Histogram of Edge Probabilities")
@@ -145,3 +145,54 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models):
     plt.show()
 
     return graph, edge_probabilities
+
+
+def construct_threshold_segmentation(preseg_mask, graph, edge_probabilities, threshold=0.5):
+    """
+    Merges segments in `preseg_mask` based on edge probabilities in `graph`.
+
+    Args:
+        preseg_mask (np.ndarray): Pre-segmented mask.
+        graph (hg.UndirectedGraph): Region adjacency graph (RAG).
+        edge_probabilities (dict): Dictionary mapping edge (segment1, segment2) -> probability p(true).
+        threshold (float): Probability threshold for merging segments.
+
+    Returns:
+        np.ndarray: New segmented image after merging.
+    """
+    # Get unique labels
+    unique_labels = np.unique(preseg_mask)
+    unique_labels = unique_labels[unique_labels > 0]  # Exclude background (0)
+
+    # Initialize Union-Find (Disjoint Set)
+    label_to_index = {int(label): int(i) for i, label in enumerate(unique_labels)}
+    parent = np.arange(len(unique_labels))  # Each segment is its own parent initially
+
+    def find(x):
+        """Find with path compression."""
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return int(parent[x])
+
+    def union(x, y):
+        """Union by rank."""
+        root_x, root_y = find(x), find(y)
+        if root_x != root_y:
+            parent[root_y] = root_x
+
+    # Merge segments with `p(true) <= threshold`
+    i=0
+    for edge, prob in edge_probabilities.items():
+        if prob <= threshold:  # Merge segments
+            region1, region2 = edge
+            if region1 in label_to_index and region2 in label_to_index:
+                i+=1
+                idx1, idx2 = int(label_to_index[region1]), int(label_to_index[region2])
+                union(idx1, idx2)
+    print('merge',i)
+    # Create a mapping from old labels to new merged labels
+    new_labels = {int(label): find(label_to_index[label]) + 1 for label in unique_labels}  # +1 to avoid 0
+    #  Relabel the preseg_mask
+    threshold_segmentation = np.vectorize(lambda x: new_labels.get(x, 0))(preseg_mask)
+
+    return threshold_segmentation
