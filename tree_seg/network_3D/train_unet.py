@@ -74,7 +74,7 @@ def train_model(config, masks_list, nuclei_list, profiles_list, flows_list, neig
 
     # Checkpoint handling
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
-    checkpoint_path = os.path.join(config["checkpoint_dir"], "unet3d_best.pth")
+    checkpoint_path = os.path.join(config["checkpoint_dir"], config["model_name"])
 
     # Training loop
     best_val_loss = np.inf

@@ -108,7 +108,7 @@ def visualize_results(config):
             viewer.add_labels(gt_neighbors[i], name=f"GT Neighbor {i+1}")
 
         # Display flow vectors as dense arrow fields
-        if config["show_flow"]:
+        if config.get("show_flow", False):
             # Convert flow fields to vector format for Napari
             gt_vectors = convert_flow_to_vectors(gt_flow)
             pred_vectors = convert_flow_to_vectors(flow)
