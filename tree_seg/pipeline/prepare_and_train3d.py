@@ -17,7 +17,7 @@ from tree_seg.pipeline.apply_model3d import main as apply_model
 from tree_seg.pipeline.visualize import visualize_results
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
 from tree_seg.metrices.matching import match_labels
-
+from tree_seg.core.neighbor_calculations import calculateBoundaryConnection
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -71,37 +71,6 @@ def plot_distribution(data, kde, title, color, save_path):
     plt.close()
     logging.info(f"📊 Saved {title} plot as {save_path}")
 
-def calculateBoundaryConnection(mask):
-    """
-    Calculates neighbor connectivity in a 3D mask.
-    
-    Args:
-        mask (torch.Tensor): 3D tensor of shape (D, H, W) representing labeled masks.
-        
-    Returns:
-        torch.Tensor: 6-channel binary tensor (6, D, H, W) indicating connectivity.
-    """
-    device = mask.device
-    D, H, W = mask.shape
-
-    # Initialize empty tensor for neighbor connectivity (6 directions)
-    connectivity = torch.zeros((6, D, H, W), dtype=torch.uint8, device=device)
-
-    # Define shifts in 6 directions (z, y, x) -> (depth, height, width)
-    shifts = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)]
-
-    # Iterate over shifts
-    for i, (dz, dy, dx) in enumerate(shifts):
-        shifted_mask = torch.roll(mask, shifts=(dz, dy, dx), dims=(0, 1, 2))
-        
-        # Check if the voxel has the same label as its shifted neighbor
-        other_label = (mask != shifted_mask) & (mask > 0) & (shifted_mask > 0) # Ignore background (0)
-    
-        
-        # Store result in the corresponding channel
-        connectivity[i] = other_label
-
-    return connectivity
 
 def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_threshold=0.25):
     """
@@ -117,12 +86,6 @@ def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_
     Returns:
         pd.DataFrame: Statistics results.
     """
-    # # Print shapes for debugging
-    # print(f"GT Shape: {gt_segmentation.shape}, Preseg Shape: {presegmentation.shape}")
-    # print(f"Neighbors Shape: {neighbors.shape}, Flow Shape: {flow.shape}")
-    # # Print dtypes for debugging
-    # print(f"GT dtype: {gt_segmentation.dtype}, Preseg dtype: {presegmentation.dtype}")
-    # print(f"Neighbors dtype: {neighbors.dtype}, Flow dtype: {flow.dtype}")
     
     presegmentation=relabel_sequentially_3D(presegmentation)
 
