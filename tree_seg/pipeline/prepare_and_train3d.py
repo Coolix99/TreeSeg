@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 import pickle
+import seaborn as sns
 
 from tree_seg.network_3D.pepare_data import calculateFlow, calculateNeighborConnection  
 from tree_seg.network_3D.train_unet import train_model  
@@ -32,33 +33,61 @@ def check_required_files(file_paths, subfolder):
         return False
     return True
 
-def fit_and_save_kde(data, filename, results_folder):
-    """Fits a KDE model and saves it as a pickle file."""
-    if len(data) == 0:
-        logging.warning(f"Skipping KDE fitting for {filename}, empty dataset.")
-        return None
+def save_concatenated_data(concatenated_data, output_folder):
+    """
+    Saves the concatenated true/false data as CSV files.
 
-    kde = gaussian_kde(data)
-    kde_path = os.path.join(results_folder, filename)
-    
-    with open(kde_path, 'wb') as f:
-        pickle.dump(kde, f)
-    
-    logging.info(f"📁 Saved KDE model: {kde_path}")
-    return kde
+    Args:
+        concatenated_data (dict): Dictionary containing the combined arrays.
+        output_folder (str): Directory to save the CSV files.
+    """
+    os.makedirs(output_folder, exist_ok=True)  # Ensure output folder exists
 
-def plot_distribution(data, kde, title, color, save_path):
+    # Separate true and false keys
+    true_keys = [key for key in concatenated_data.keys() if key.startswith("true_")]
+    false_keys = [key for key in concatenated_data.keys() if key.startswith("false_")]
+
+    # Create DataFrames
+    df_true = pd.DataFrame({key.replace("true_", ""): concatenated_data[key] for key in true_keys})
+    df_false = pd.DataFrame({key.replace("false_", ""): concatenated_data[key] for key in false_keys})
+
+    # Save to CSV
+    true_csv_path = os.path.join(output_folder, "true_data.csv")
+    false_csv_path = os.path.join(output_folder, "false_data.csv")
+
+    df_true.to_csv(true_csv_path, index=False)
+    df_false.to_csv(false_csv_path, index=False)
+
+    print(f"Saved: {true_csv_path}")
+    print(f"Saved: {false_csv_path}")
+
+# def fit_and_save_kde(data, filename, results_folder):
+#     """Fits a KDE model and saves it as a pickle file."""
+#     if len(data) == 0:
+#         logging.warning(f"Skipping KDE fitting for {filename}, empty dataset.")
+#         return None
+
+#     kde = gaussian_kde(data,0.5)
+#     # kde_path = os.path.join(results_folder, filename)
+    
+#     # with open(kde_path, 'wb') as f:
+#     #     pickle.dump(kde, f)
+    
+#     # logging.info(f"📁 Saved KDE model: {kde_path}")
+#     return kde
+
+def plot_distribution(data, title, color, save_path):
     """Plots histogram and KDE curve, saves the plot."""
-    if len(data) == 0 or kde is None:
-        logging.warning(f"Skipping {title}, missing data or KDE.")
+    if len(data) == 0 :
+        logging.warning(f"Skipping {title}, missing data ")
         return
     
-    x_vals = np.linspace(min(data), max(data), 200)
-    kde_vals = kde(x_vals)
+    # x_vals = np.linspace(min(data), max(data), 200)
+    # kde_vals = kde(x_vals)
 
     plt.figure(figsize=(8, 5))
     plt.hist(data, bins=30, density=True, alpha=0.5, color=color, edgecolor='black', label='Histogram')
-    plt.plot(x_vals, kde_vals, color=color, linewidth=2, label='KDE Curve')
+    # plt.plot(x_vals, kde_vals, color=color, linewidth=2, label='KDE Curve')
     
     plt.yscale('log')  # Enable log scale
     plt.title(title)
@@ -71,6 +100,125 @@ def plot_distribution(data, kde, title, color, save_path):
     plt.close()
     logging.info(f"📊 Saved {title} plot as {save_path}")
 
+def compute_kde_contour(x, y, grid_size=100, levels=5):
+    """
+    Compute 2D Kernel Density Estimate (KDE) and contour levels.
+    
+    Args:
+        x, y (np.ndarray): 1D arrays of data points.
+        grid_size (int): Resolution of KDE grid.
+        levels (int): Number of contour levels.
+
+    Returns:
+        xx, yy (meshgrid): Grid coordinates.
+        density (np.ndarray): KDE density values on grid.
+        contour_levels (list): Contour density values.
+    """
+    # Grid range
+    x_min, x_max = x.min(), x.max()
+    y_min, y_max = y.min(), y.max()
+    
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, grid_size),
+                         np.linspace(y_min, y_max, grid_size))
+
+    # Fit KDE
+    positions = np.vstack([xx.ravel(), yy.ravel()])
+    values = np.vstack([x, y])
+    kde = stats.gaussian_kde(values)(positions).reshape(xx.shape)
+
+    # Compute contour levels
+    contour_levels = np.linspace(kde.min(), kde.max(), levels)
+
+    return xx, yy, kde, contour_levels
+
+import numpy as np
+import pandas as pd
+import scipy.stats as stats
+from itertools import combinations
+from bokeh.plotting import figure, show
+from bokeh.layouts import gridplot
+from bokeh.models import  HoverTool
+
+def sample_data(data, sample_size=200):
+    """Randomly samples rows while keeping column alignment."""
+    if len(data) > sample_size:
+        idx = np.random.choice(data.shape[0], sample_size, replace=False)
+        return data[idx]
+    return data
+
+def plot_corner_contour(concatenated_data, sample_size=5000, contour_levels=10, outlier_threshold=0.05):
+    """
+    Creates a corner plot using KDE contours for dense regions 
+    and scatter points for outliers using Bokeh.
+
+    Args:
+        concatenated_data (dict): Dictionary with 1D numpy arrays for each key.
+        sample_size (int): Number of points to sample for efficiency.
+        contour_levels (int): Number of contour levels.
+        outlier_threshold (float): Threshold for outlier detection.
+    """
+    var_names = ["Neighbors", "Flow Cos", "Boundary Volume"]
+
+    # Stack data first, then sample
+    true_data = np.column_stack([
+        concatenated_data["true_neighbors"], 
+        concatenated_data["true_flow_cos"], 
+        concatenated_data["true_boundary_log100_volumes_max"]
+    ])
+    
+    false_data = np.column_stack([
+        concatenated_data["false_neighbors"], 
+        concatenated_data["false_flow_cos"], 
+        concatenated_data["false_boundary_log100_volumes_max"]
+    ])
+
+    # Sample rows while preserving alignment
+    true_data = sample_data(true_data, sample_size)
+    false_data = sample_data(false_data, sample_size)
+
+    df_true = pd.DataFrame(true_data, columns=var_names)
+    df_false = pd.DataFrame(false_data, columns=var_names)
+
+    plots = []
+    for x_var, y_var in combinations(var_names, 2):  
+        x_true, y_true = df_true[x_var].values, df_true[y_var].values
+        x_false, y_false = df_false[x_var].values, df_false[y_var].values
+
+        # Compute KDE for contours
+        xx, yy, kde_true, levels_true = compute_kde_contour(x_true, y_true, levels=contour_levels)
+        xx, yy, kde_false, levels_false = compute_kde_contour(x_false, y_false, levels=contour_levels)
+
+        # Identify outliers based on KDE threshold
+        kde_true_eval = stats.gaussian_kde(np.vstack([x_true, y_true]))(np.vstack([x_true, y_true]))
+        kde_false_eval = stats.gaussian_kde(np.vstack([x_false, y_false]))(np.vstack([x_false, y_false]))
+
+        outliers_true = kde_true_eval < np.percentile(kde_true_eval, outlier_threshold * 100)
+        outliers_false = kde_false_eval < np.percentile(kde_false_eval, outlier_threshold * 100)
+
+        # Create Bokeh plot
+        p = figure(title=f"{x_var} vs {y_var}", tools="pan,wheel_zoom,box_zoom,reset,save")
+
+        # Contours for dense regions
+        p.contour(xx, yy, kde_true, levels=levels_true, fill_alpha=0.3,line_color=["blue"]*5 )
+        p.contour(xx, yy, kde_false, levels=levels_false, fill_alpha=0.3,line_color=["red"]*5 )
+
+        # Scatter for outliers
+        p.scatter(x=x_true[outliers_true], y=y_true[outliers_true], fill_color="blue", alpha=0.5, legend_label="True Outliers")
+        p.scatter(x=x_false[outliers_false], y=y_false[outliers_false], fill_color="red", alpha=0.5, legend_label="False Outliers")
+
+        # Tooltips
+        hover = HoverTool(tooltips=[(x_var, f"@{x_var}"), (y_var, f"@{y_var}")])
+        p.add_tools(hover)
+
+        p.legend.location = "top_right"
+        p.xaxis.axis_label = x_var
+        p.yaxis.axis_label = y_var
+        p.grid.grid_line_alpha = 0.3
+        plots.append(p)
+
+    # Arrange plots in a grid
+    grid = gridplot([plots[i:i+2] for i in range(0, len(plots), 2)])  # 2 per row
+    show(grid)
 
 def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_threshold=0.25):
     """
@@ -105,16 +253,15 @@ def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_
     
     # Compute segment sizes
     gt_sizes = [np.sum(gt_segmentation == lbl) for lbl in gt_labels]
-    preseg_sizes = [np.sum(presegmentation == lbl) for lbl in preseg_labels]
-    
+    preseg_sizes = {int(lbl):np.sum(presegmentation == lbl) for lbl in preseg_labels}
     # Compute statistics
     stats = {
         "num_gt_segments": [len(gt_labels)],
         "num_preseg_segments": [len(preseg_labels)],
         "unmatched_gt_segments": [unmatched_gt],
         "unmatched_preseg_segments": [unmatched_preseg],
-        "avg_gt_size": [np.mean(gt_sizes) if gt_sizes else 0],
-        "avg_preseg_size": [np.mean(preseg_sizes) if preseg_sizes else 0]
+        #"avg_gt_size": [np.mean(gt_sizes) if gt_sizes else 0],
+        #"avg_preseg_size": [np.mean(preseg_sizes) if preseg_sizes else 0]
     }
 
     boundaries_preseg = calculateBoundaryConnection(torch.tensor(presegmentation)).cpu().numpy()
@@ -143,12 +290,35 @@ def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_
         [0, 0, -1],  # For value 4
         [0, 0, 1]    # For value 5
     ])
-
+    
     true_flow_cos = np.sum(coefficients[true_boundaries[0]].T * true_flow_vecs,axis=0)
     false_flow_cos = np.sum(coefficients[false_boundaries[0]].T * false_flow_vecs,axis=0)
 
- 
-    return pd.DataFrame(stats),true_neighbor_values,false_neighbor_values,true_flow_cos,false_flow_cos
+    def get_boundary_volumes(boundaries):
+        segment1 = presegmentation[boundaries[1], boundaries[2], boundaries[3]]
+        segment2 = presegmentation[boundaries[1] - coefficients[boundaries[0], 0],
+                                   boundaries[2] - coefficients[boundaries[0], 1],
+                                   boundaries[3] - coefficients[boundaries[0], 2]]
+        # print(boundaries)
+        # print(segment1)
+        # print(segment2)    
+        #volumes = np.array([preseg_sizes[int(s1)] + preseg_sizes[int(s2)] for s1, s2 in zip(segment1, segment2)])
+        log100_volumes_min = np.log(np.array([min(preseg_sizes[int(s1)], preseg_sizes[int(s2)]) for s1, s2 in zip(segment1, segment2)])/100)
+        log100_volumes_max = np.log(np.array([max(preseg_sizes[int(s1)], preseg_sizes[int(s2)]) for s1, s2 in zip(segment1, segment2)])/100)
+        #volumes_abs_diff = np.array([abs(preseg_sizes[int(s1)] - preseg_sizes[int(s2)]) for s1, s2 in zip(segment1, segment2)])
+
+        
+        return log100_volumes_min,log100_volumes_max
+
+    true_boundary_log100_volumes_min,true_boundary_log100_volumes_max = get_boundary_volumes(true_boundaries)
+    false_boundary_log100_volumes_min,false_boundary_log100_volumes_max = get_boundary_volumes(false_boundaries)
+    # print(false_boundaries[0].shape)
+    # print(false_boundary_volumes.shape)
+    
+    return pd.DataFrame(stats),true_neighbor_values,false_neighbor_values, \
+            true_flow_cos,false_flow_cos, \
+            true_boundary_log100_volumes_min,true_boundary_log100_volumes_max, \
+            false_boundary_log100_volumes_min,false_boundary_log100_volumes_max
 
 
 ### 🔹 WRAPPER FUNCTIONS
@@ -341,7 +511,10 @@ def compute_and_save_statistics(config, plot=False):
     preseg_folder = os.path.join(config["results_folder"], "presegmentation")
     applied_to_gt_folder = os.path.join(config["results_folder"], 'applied_to_gt')
 
-    all_data = {"true_neighbors": [], "false_neighbors": [], "true_flow_cos": [], "false_flow_cos": []}
+    all_data = {"true_neighbors": [], "false_neighbors": [], 
+                "true_flow_cos": [], "false_flow_cos": [], 
+                "true_boundary_log100_volumes_min":[],"true_boundary_log100_volumes_max":[],
+                "false_boundary_log100_volumes_min":[],"false_boundary_log100_volumes_max":[]}
     all_stats = []
 
     for subfolder in sorted(os.listdir(preseg_folder)):
@@ -379,25 +552,24 @@ def compute_and_save_statistics(config, plot=False):
         logging.warning("⚠️ No statistics were computed. Skipping KDE fitting.")
         return  # Exit early if no data was processed
 
-    # Save KDEs and plots
-    for key, color in zip(all_data.keys(), ["blue", "red", "green", "purple"]):
-        kde_file = os.path.join(results_folder, f"kde_{key}.pkl")
+    # Save concatenated data and plots
+    concatenated_data={}
+    for key, color in zip(all_data.keys(), ["blue", "red", "green", "purple", "black", "black", "black", "black"]):
+        #kde_file = os.path.join(results_folder, f"kde_{key}.pkl")
 
-        if not force_recompute and os.path.exists(kde_file):
-            logging.info(f"Skipping KDE fitting for {key}. Existing file found: {kde_file}")
-            continue
-
-        kde = fit_and_save_kde(np.concatenate(all_data[key]), f"kde_{key}.pkl", results_folder)
-
+        concatenated_data[key]=np.concatenate(all_data[key])
+        #kde = fit_and_save_kde(concatenated_data[key], f"kde_{key}.pkl", results_folder)
+        #print(key,np.mean(concatenated_data[key]))
         if plot:
             plot_distribution(
-                np.concatenate(all_data[key]),
-                kde,
+                concatenated_data[key],
                 key.replace("_", " ").title(),
                 color,
                 os.path.join(results_folder, f"{key}.png")
             )
-
+    save_concatenated_data(concatenated_data, results_folder)
+    #plot_corner_contour(concatenated_data)
+    
 ### 🔹 HOLE PIPELINE
 
 def main(config):

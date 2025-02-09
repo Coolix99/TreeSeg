@@ -1,7 +1,65 @@
 import torch
 import numpy as np
 import pytest
-from tree_seg.core.neighbor_calculations import calculateBoundaryConnection
+from tree_seg.core.neighbor_calculations import calculateBoundaryConnection, shift_tensor
+
+def test_shift_tensor():
+    # Create a simple 3D tensor
+    mask = torch.tensor([
+        [[1, 2], [3, 4]],
+        [[5, 6], [7, 8]]
+    ], dtype=torch.float32)  # Shape: (2, 2, 2)
+
+    # 1. No shift (should be identical)
+    assert torch.equal(shift_tensor(mask, 0, 0, 0), mask)
+
+    # 2. Shift in +z (down)
+    expected = torch.tensor([
+        [[0, 0], [0, 0]],
+        [[1, 2], [3, 4]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, 1, 0, 0), expected)
+
+    # 3. Shift in -z (up)
+    expected = torch.tensor([
+        [[5, 6], [7, 8]],
+        [[0, 0], [0, 0]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, -1, 0, 0), expected)
+
+    # 4. Shift in +y (down)
+    expected = torch.tensor([
+        [[0, 0], [1, 2]],
+        [[0, 0], [5, 6]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, 0, 1, 0), expected)
+
+    # 5. Shift in -y (up)
+    expected = torch.tensor([
+        [[3, 4], [0, 0]],
+        [[7, 8], [0, 0]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, 0, -1, 0), expected)
+
+    # 6. Shift in +x (right)
+    expected = torch.tensor([
+        [[0, 1], [0, 3]],
+        [[0, 5], [0, 7]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, 0, 0, 1), expected)
+
+    # 7. Shift in -x (left)
+    expected = torch.tensor([
+        [[2, 0], [4, 0]],
+        [[6, 0], [8, 0]]
+    ], dtype=torch.float32)
+    assert torch.equal(shift_tensor(mask, 0, 0, -1), expected)
+
+    # 8. Large shift that clears the tensor
+    expected = torch.zeros_like(mask)
+    assert torch.equal(shift_tensor(mask, 2, 0, 0), expected)
+    assert torch.equal(shift_tensor(mask, 0, 2, 0), expected)
+    assert torch.equal(shift_tensor(mask, 0, 0, 2), expected)
 
 def test_single_cube():
     """
@@ -26,7 +84,6 @@ def test_two_adjacent_voxels():
     mask[1, 1, 2] = 2  # Adjacent in x-direction
 
     connectivity = calculateBoundaryConnection(mask)
-
     # Expect only 2 non-zero entries (one for each voxel)
     assert torch.sum(connectivity) == 2
     assert connectivity[4, 1, 1, 1] == 1  # x+ direction
