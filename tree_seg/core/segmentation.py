@@ -73,7 +73,6 @@ def construct_connection_graph(preseg_mask, flow, neighbors):
                     edge_boundaries[edge_key].append((z, y, x))
                     edge_normals[edge_key].append(coefficients[direction])
 
-                    # ✅ **FIX: Correct indexing for `neighbors` using `direction`**
                     neighbor_value = neighbors[direction, z, y, x]
                     edge_values[edge_key]["neighbor_values"].append(neighbor_value)
 
@@ -91,7 +90,7 @@ def construct_connection_graph(preseg_mask, flow, neighbors):
 
     return graph, edge_boundaries, edge_normals, edge_values
 
-def construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models):
+def construct_segmentation_graph(preseg_mask, flow, neighbors, l_models):
     """
     Constructs a region adjacency graph (RAG) and assigns probabilities to each edge 
     using KDE-based Bayesian inference.
@@ -118,18 +117,30 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models):
         neighbor_values = values["neighbor_values"]
         flow_cos_values = values["flow_cos_values"]
 
-        L_true_neighbors = kde_models["true_neighbors"](neighbor_values)
-        L_false_neighbors = kde_models["false_neighbors"](neighbor_values)
-        L_true_flow_cos = kde_models["true_flow_cos"](flow_cos_values)
-        L_false_flow_cos = kde_models["false_flow_cos"](flow_cos_values)
+        l_true_neighbors = l_models["true_neighbors"](neighbor_values)
+        l_false_neighbors = l_models["false_neighbors"](neighbor_values)
+        l_true_flow_cos = l_models["true_flow_cos"](flow_cos_values)
+        l_false_flow_cos = l_models["false_flow_cos"](flow_cos_values)
+
+        todo determine volumes
+
+        l_true_vol_min = l_models["true_boundary_log100_volumes_min"]()
+        l_true_vol_max = l_models["true_boundary_log100_volumes_max"]()
+        l_false_vol_min = l_models["false_boundary_log100_volumes_min"]()
+        l_false_vol_max = l_models["false_boundary_log100_volumes_max"]()
         # print(L_true_neighbors.max(),L_true_neighbors.min())
         # print(L_false_neighbors.max(),L_false_neighbors.min())
         # print(L_true_flow_cos.max(),L_true_flow_cos.min())
         # print(L_false_flow_cos.max(),L_false_flow_cos.min())
         # print('---------')
-        L_true = np.prod(L_true_neighbors) * np.prod(L_true_flow_cos)
-        L_false = np.prod(L_false_neighbors) * np.prod(L_false_flow_cos)
-        #print((L_true_flow_cos/L_false_flow_cos).max(),(L_true_flow_cos/L_false_flow_cos).min())
+        l_true = np.sum(l_true_neighbors) + np.sum(l_true_flow_cos)
+        l_false = np.sum(l_false_neighbors) + np.sum(l_false_flow_cos)
+
+        l_true = l_true_vol_min + l_false_vol_min
+        l_false = l_true_vol_max + l_false_vol_max
+
+        L_true = np.exp(l_true)
+        L_false = np.exp(l_false)
         P_true = L_true / (L_true + L_false)
 
         edge_probabilities[edge] = P_true

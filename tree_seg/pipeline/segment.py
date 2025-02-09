@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import tifffile as tiff
 import pickle
+import pandas as pd
 from scipy.interpolate import interp1d
 
 from tree_seg.core.pre_segmentation import connected_components_3D
@@ -26,15 +27,119 @@ def check_required_files(file_paths, subfolder):
         return False
     return True
 
-def kde_to_interpolator(kde, num_points=200):
-    """Precompute KDE values and create an interpolated function for fast lookup."""
-    x_grid = np.linspace(kde.dataset.min(), kde.dataset.max(), num_points)
-    kde_values = kde.pdf(x_grid)
+### 🔹 HISTOGRAM BINS & INTERPOLATION
 
-    # Create an interpolator
-    interpolator = interp1d(x_grid, kde_values, kind="linear", fill_value=(kde_values[0], kde_values[-1]), bounds_error=False)
-    return interpolator
+def histogram_interpolator(data, bins=50, min_entries=10):
+    """
+    Creates an interpolator based on histogram binning.
+    - Ensures at least `min_entries` per bin by adjusting bins dynamically.
+    - Interpolates missing bins to maintain continuity.
 
+    Args:
+        data (np.ndarray): 1D array of values.
+        bins (int): Initial number of bins.
+        min_entries (int): Minimum number of samples per bin.
+
+    Returns:
+        function: Interpolated function for density estimation.
+    """
+    if len(data) == 0:
+        return lambda x: 0  # Return zero function if no data
+
+    # Compute initial histogram
+    hist, bin_edges = np.histogram(data, bins=bins, density=True)
+    counts, _ = np.histogram(data, bins=bins)  # Count number of points per bin
+
+    # Ensure bins have at least `min_entries`
+    while any(counts < min_entries):
+        bins = max(5, bins - 5)  # Reduce bin count dynamically
+        hist, bin_edges = np.histogram(data, bins=bins, density=True)
+        counts, _ = np.histogram(data, bins=bins)
+
+    # Compute bin centers
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # Fill empty bins by linear interpolation
+    valid = counts >= min_entries
+    bin_centers = bin_centers[valid]
+    hist = hist[valid]
+
+    log_hist = np.log(hist)
+
+    # Set boundary values
+    log_min = log_hist[0]  # Left boundary value
+    log_max = log_hist[-1] # Right boundary value
+
+    return interp1d(bin_centers, log_hist, kind="linear", fill_value=(log_min, log_max), bounds_error=False)
+
+
+
+### 🔹 LOAD CSV DATA & CREATE INTERPOLATORS
+
+def load_data_and_create_interpolators(statistics_folder):
+    """
+    Loads segmentation statistics from CSV and generates histogram-based interpolators.
+
+    Args:
+        statistics_folder (str): Folder containing CSV files.
+
+    Returns:
+        dict: Interpolators for each segmentation metric.
+    """
+    # Define paths
+    true_data_path = os.path.join(statistics_folder, "true_data.csv")
+    false_data_path = os.path.join(statistics_folder, "false_data.csv")
+
+    # Load CSV data
+    if not os.path.exists(true_data_path) or not os.path.exists(false_data_path):
+        logging.error("Missing segmentation statistics CSV files!")
+        return {}
+
+    df_true = pd.read_csv(true_data_path)
+    df_false = pd.read_csv(false_data_path)
+
+    # Generate histogram interpolators
+    interpolators = {}
+    for column in df_true.columns:
+        interpolators[f"true_{column}"] = histogram_interpolator(df_true[column].dropna().values)
+    for column in df_false.columns:
+        interpolators[f"false_{column}"] = histogram_interpolator(df_false[column].dropna().values)
+
+    logging.info(f"✅ Loaded & processed segmentation statistics with histogram binning.")
+
+    import matplotlib.pyplot as plt
+    num_cols = len(df_true.columns)
+    fig, axes = plt.subplots(num_cols, 2, figsize=(10, num_cols * 4))
+
+    for i, column in enumerate(df_true.columns):
+        # Plot true values
+        ax_true = axes[i, 0]
+        true_values = df_true[column].dropna().values
+        x_true = np.linspace(true_values.min()-0.2, true_values.max()+0.2, 200)
+        y_true = interpolators[f"true_{column}"](x_true)
+
+        ax_true.hist(true_values, bins=30, density=True, alpha=0.5, color="blue", label="True Histogram")
+        ax_true.plot(x_true, np.exp(y_true), color="black", label="True Interpolation")
+        ax_true.set_title(f"True: {column}")
+        ax_true.set_yscale('log')
+        ax_true.legend()
+
+        # Plot false values
+        ax_false = axes[i, 1]
+        false_values = df_false[column].dropna().values
+        x_false = np.linspace(false_values.min()-0.2, false_values.max()+0.2, 200)
+        y_false = interpolators[f"false_{column}"](x_false)
+
+        ax_false.hist(false_values, bins=30, density=True, alpha=0.5, color="red", label="False Histogram")
+        ax_false.plot(x_false, np.exp(y_false), color="black", label="False Interpolation")
+        ax_false.set_title(f"False: {column}")
+        ax_false.set_yscale('log')
+        ax_false.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+    return interpolators
 
 ### 🔹 INFERENCE PIPELINE FUNCTIONS
 
@@ -108,22 +213,11 @@ def load_and_prepare_segmentation(config):
     os.makedirs(final_segmentation_folder, exist_ok=True)
     force_recompute = config.get("force_recompute", False)
 
-    # Load KDE models
-    kde_paths = {
-        "true_neighbors": os.path.join(statistics_folder, "kde_true_neighbors.pkl"),
-        "false_neighbors": os.path.join(statistics_folder, "kde_false_neighbors.pkl"),
-        "true_flow_cos": os.path.join(statistics_folder, "kde_true_flow_cos.pkl"),
-        "false_flow_cos": os.path.join(statistics_folder, "kde_false_flow_cos.pkl"),
-    }
-
-    kde_models = {}
-    for key, path in kde_paths.items():
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                kde_models[key] = kde_to_interpolator(pickle.load(f))
-            logging.info(f"✅ Loaded KDE model: {key}")
-        else:
-            logging.warning(f"⚠️ Missing KDE model: {key}, some logic may not work as expected.")
+    # Load histogram-based interpolators
+    interpolators = load_data_and_create_interpolators(statistics_folder)
+    if not interpolators:
+        logging.error("❌ Failed to load segmentation statistics.")
+        return
 
     subfolders = sorted([f for f in os.listdir(preseg_folder) if os.path.isdir(os.path.join(preseg_folder, f))])
     logging.info(f"Found {len(subfolders)} subfolders for final segmentation.")
@@ -152,10 +246,12 @@ def load_and_prepare_segmentation(config):
         
 
         preseg_mask = relabel_sequentially_3D(preseg_mask)
-        graph, edge_probabilities=construct_segmentation_graph(preseg_mask.copy(),flow,neighbors,kde_models)
+        graph, edge_probabilities=construct_segmentation_graph(preseg_mask.copy(),flow,neighbors,interpolators)
         threshold_segmentation_01=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.01)
         threshold_segmentation_05=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.5)
         
+        todo proper graph like approach
+
         import napari
         viewer=napari.Viewer()
         viewer.add_labels(threshold_segmentation_05,name='thr_seg 05')
