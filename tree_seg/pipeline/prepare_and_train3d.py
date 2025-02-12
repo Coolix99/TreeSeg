@@ -13,7 +13,7 @@ import seaborn as sns
 
 from tree_seg.network_3D.pepare_data import calculateFlow, calculateNeighborConnection  
 from tree_seg.network_3D.train_unet import train_model  
-from tree_seg.core.pre_segmentation import connected_components_3D
+from tree_seg.core.pre_segmentation import connected_components_3D, euler_connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
 from tree_seg.pipeline.visualize import visualize_results
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
@@ -477,7 +477,8 @@ def run_pre_segmentation(config):
         flow = np.load(flow_path)  # Shape: (3, D, H, W)
 
         # Compute connected components (pre-segmentation)
-        labels = connected_components_3D(mask, flow)
+        #labels = connected_components_3D(mask, flow)
+        labels = euler_connected_components_3D(mask, flow)
 
         # Save pre-segmented labels
         tiff.imwrite(preseg_output_path, labels.astype(np.uint16))

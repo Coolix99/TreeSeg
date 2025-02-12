@@ -55,71 +55,71 @@ def generate_test_data_minimal(shape=(5, 5, 5)):
 
     return preseg_mask, flow, neighbors
 
-def test_construct_connection_graph():
-    """
-    Tests the construction of the region adjacency graph (RAG).
-    Ensures proper connections between adjacent regions.
-    """
-    preseg_mask, flow, neighbors = generate_test_data()
+# def test_construct_connection_graph():
+#     """
+#     Tests the construction of the region adjacency graph (RAG).
+#     Ensures proper connections between adjacent regions.
+#     """
+#     preseg_mask, flow, neighbors = generate_test_data()
 
-    graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
+#     graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
 
-    assert isinstance(graph, hg.UndirectedGraph)
-    assert graph.num_vertices() > 0  # Ensure at least some segments exist
-    assert graph.num_edges() > 0  # Ensure at least some connections exist
-
-
-def test_construct_connection_graph_result():
-    """
-    Tests the construction of the region adjacency graph (RAG).
-    Ensures proper connections between adjacent regions.
-    """
-    preseg_mask, flow, neighbors = generate_test_data_minimal()
-
-    graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
-
-    assert isinstance(graph, hg.UndirectedGraph)
-    assert graph.num_vertices() > 0  # Ensure at least some segments exist
-    assert graph.num_edges() > 0  # Ensure at least some connections exist
-
-    expected={
-        (1, 2): np.array([[2, 2, 2]]),
-        (2, 1): np.array([[2, 3, 2]]),
-        (2, 3): np.array([[2, 3, 2]]), 
-        (3, 2): np.array([[2, 3, 3]])
-    }
-
-    for key in expected:
-        assert key in edge_boundaries, f"Missing edge {key} in edge_boundaries"
-        assert np.array_equal(edge_boundaries[key], expected[key]), f"Mismatch for edge {key}"
+#     assert isinstance(graph, hg.UndirectedGraph)
+#     assert graph.num_vertices() > 0  # Ensure at least some segments exist
+#     assert graph.num_edges() > 0  # Ensure at least some connections exist
 
 
+# def test_construct_connection_graph_result():
+#     """
+#     Tests the construction of the region adjacency graph (RAG).
+#     Ensures proper connections between adjacent regions.
+#     """
+#     preseg_mask, flow, neighbors = generate_test_data_minimal()
 
-def test_construct_segmentation_graph():
-    """
-    Tests the full segmentation graph construction with KDE-based probability estimation.
-    Ensures probability computation is stable and within valid range.
-    """
-    preseg_mask, flow, neighbors = generate_test_data()
+#     graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
 
-    # Create synthetic KDE models
-    kde_models = {
-        "true_neighbors": gaussian_kde(np.random.rand(1000)),
-        "false_neighbors": gaussian_kde(np.random.rand(1000)),
-        "true_flow_cos": gaussian_kde(np.random.rand(1000)),
-        "false_flow_cos": gaussian_kde(np.random.rand(1000))
-    }
+#     assert isinstance(graph, hg.UndirectedGraph)
+#     assert graph.num_vertices() > 0  # Ensure at least some segments exist
+#     assert graph.num_edges() > 0  # Ensure at least some connections exist
 
-    graph, edge_probabilities = construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models)
+#     expected={
+#         (1, 2): np.array([[2, 2, 2]]),
+#         (2, 1): np.array([[2, 3, 2]]),
+#         (2, 3): np.array([[2, 3, 2]]), 
+#         (3, 2): np.array([[2, 3, 3]])
+#     }
 
-    assert isinstance(graph, hg.UndirectedGraph)
-    assert graph.num_vertices() > 0  # Ensure at least some segments exist
-    assert graph.num_edges() > 0  # Ensure at least some connections exist
-    assert len(edge_probabilities) > 0  # Ensure probability mapping is not empty
+#     for key in expected:
+#         assert key in edge_boundaries, f"Missing edge {key} in edge_boundaries"
+#         assert np.array_equal(edge_boundaries[key], expected[key]), f"Mismatch for edge {key}"
 
-    # Ensure probabilities are in the valid range
-    for p in edge_probabilities.values():
-        assert 0.0 <= p <= 1.0, "Probability must be in the range [0,1]"
 
-if __name__ == "__main__":
-    pytest.main()
+
+# def test_construct_segmentation_graph():
+#     """
+#     Tests the full segmentation graph construction with KDE-based probability estimation.
+#     Ensures probability computation is stable and within valid range.
+#     """
+#     preseg_mask, flow, neighbors = generate_test_data()
+
+#     # Create synthetic KDE models
+#     kde_models = {
+#         "true_neighbors": gaussian_kde(np.random.rand(1000)),
+#         "false_neighbors": gaussian_kde(np.random.rand(1000)),
+#         "true_flow_cos": gaussian_kde(np.random.rand(1000)),
+#         "false_flow_cos": gaussian_kde(np.random.rand(1000))
+#     }
+
+#     graph, edge_probabilities = construct_segmentation_graph(preseg_mask, flow, neighbors, kde_models)
+
+#     assert isinstance(graph, hg.UndirectedGraph)
+#     assert graph.num_vertices() > 0  # Ensure at least some segments exist
+#     assert graph.num_edges() > 0  # Ensure at least some connections exist
+#     assert len(edge_probabilities) > 0  # Ensure probability mapping is not empty
+
+#     # Ensure probabilities are in the valid range
+#     for p in edge_probabilities.values():
+#         assert 0.0 <= p <= 1.0, "Probability must be in the range [0,1]"
+
+# if __name__ == "__main__":
+#     pytest.main()

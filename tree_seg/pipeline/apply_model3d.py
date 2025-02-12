@@ -62,7 +62,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
         segmentation, pred_flows, neighbor_preds = apply_model(config, image,profile)
         
         # Save results
-        tiff.imwrite(seg_output_path, segmentation.astype(np.bool))
+        tiff.imwrite(seg_output_path, segmentation.astype(bool))
         np.save(flow_output_path, pred_flows)
         np.save(neighbor_output_path, neighbor_preds)
 

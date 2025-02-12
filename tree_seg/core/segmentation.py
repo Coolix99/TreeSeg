@@ -88,7 +88,10 @@ def construct_connection_graph(preseg_mask, flow, neighbors):
         edge_values[key]["neighbor_values"] = np.array(edge_values[key]["neighbor_values"])
         edge_values[key]["flow_cos_values"] = np.array(edge_values[key]["flow_cos_values"])
 
-    return graph, edge_boundaries, edge_normals, edge_values
+    # determine presegment sizes
+    segment_sizes = {label: np.sum(preseg_mask == label) for label in unique_labels}
+
+    return graph, edge_boundaries, edge_normals, edge_values,segment_sizes
 
 def construct_segmentation_graph(preseg_mask, flow, neighbors, l_models):
     """
@@ -106,7 +109,7 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, l_models):
         dict: Dictionary mapping edge (segment1, segment2) -> probability p(true).
     """
     # Build adjacency graph and extract edge information
-    graph, edge_boundaries, edge_normals, edge_values = construct_connection_graph(preseg_mask, flow, neighbors)
+    graph, edge_boundaries, edge_normals, edge_values,segment_sizes = construct_connection_graph(preseg_mask, flow, neighbors)
     
     edge_probabilities = {}  # Store P(true) for each edge
     all_probabilities = []   # Store probabilities for visualization
@@ -122,27 +125,35 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, l_models):
         l_true_flow_cos = l_models["true_flow_cos"](flow_cos_values)
         l_false_flow_cos = l_models["false_flow_cos"](flow_cos_values)
 
-        todo determine volumes
+        region1, region2 = edge
+        print('edge',edge)
+        vol_min = np.log(min(segment_sizes[region1], segment_sizes[region2])/100)
+        print('vol_min',vol_min)
+        vol_max = np.log(max(segment_sizes[region1], segment_sizes[region2])/100)
+        l_true_vol_min = l_models["true_boundary_log100_volumes_min"](vol_min)
+        l_true_vol_max = l_models["true_boundary_log100_volumes_max"](vol_max)
+        l_false_vol_min = l_models["false_boundary_log100_volumes_min"](vol_min)
+        l_false_vol_max = l_models["false_boundary_log100_volumes_max"](vol_max)
 
-        l_true_vol_min = l_models["true_boundary_log100_volumes_min"]()
-        l_true_vol_max = l_models["true_boundary_log100_volumes_max"]()
-        l_false_vol_min = l_models["false_boundary_log100_volumes_min"]()
-        l_false_vol_max = l_models["false_boundary_log100_volumes_max"]()
         # print(L_true_neighbors.max(),L_true_neighbors.min())
         # print(L_false_neighbors.max(),L_false_neighbors.min())
         # print(L_true_flow_cos.max(),L_true_flow_cos.min())
         # print(L_false_flow_cos.max(),L_false_flow_cos.min())
         # print('---------')
-        l_true = np.sum(l_true_neighbors) + np.sum(l_true_flow_cos)
-        l_false = np.sum(l_false_neighbors) + np.sum(l_false_flow_cos)
 
-        l_true = l_true_vol_min + l_false_vol_min
-        l_false = l_true_vol_max + l_false_vol_max
+        # l_true = np.sum(l_true_neighbors) + np.sum(l_true_flow_cos)
+        # l_false = np.sum(l_false_neighbors) + np.sum(l_false_flow_cos)
+
+        l_true = np.sum(l_true_neighbors) + np.sum(l_true_flow_cos) + l_true_vol_min + l_true_vol_max
+        l_false = np.sum(l_false_neighbors) + np.sum(l_false_flow_cos) + l_false_vol_min+ + l_false_vol_max
+
+        # l_true = l_true_vol_min + l_true_vol_max 
+        # l_false = l_false_vol_min+ l_false_vol_max
 
         L_true = np.exp(l_true)
         L_false = np.exp(l_false)
         P_true = L_true / (L_true + L_false)
-
+        #print(l_true,l_false,P_true)
         edge_probabilities[edge] = P_true
         all_probabilities.append(P_true)
 
@@ -155,7 +166,7 @@ def construct_segmentation_graph(preseg_mask, flow, neighbors, l_models):
     plt.grid(True)
     plt.show()
 
-    return graph, edge_probabilities
+    return graph, edge_probabilities, edge_values,segment_sizes
 
 
 def construct_threshold_segmentation(preseg_mask, graph, edge_probabilities, threshold=0.5):
@@ -207,3 +218,130 @@ def construct_threshold_segmentation(preseg_mask, graph, edge_probabilities, thr
     threshold_segmentation = np.vectorize(lambda x: new_labels.get(x, 0))(preseg_mask)
 
     return threshold_segmentation
+
+def update_probabilities(edge_probabilities, merged_region1, merged_region2, graph, l_models, edge_values, segment_sizes):
+    """
+    Updates edge probabilities after merging two segments.
+
+    Args:
+        edge_probabilities (dict): Dictionary mapping edge (segment1, segment2) -> probability p(true).
+        merged_region1 (int): The surviving region after merging.
+        merged_region2 (int): The absorbed region.
+        graph (hg.UndirectedGraph): Region adjacency graph (RAG).
+        l_models (dict): Pre-trained KDE models for probability estimation.
+        edge_values (dict): Edge feature values (neighbor_values, flow_cos_values).
+        segment_sizes (dict): Dictionary mapping segment labels to their sizes.
+
+    Returns:
+        dict: Updated edge probabilities.
+    """
+    affected_edges = set()
+
+    # Find edges that involve either merged_region1 or merged_region2
+    for edge in list(edge_probabilities.keys()):
+        region1, region2 = edge
+        if merged_region2 in edge:  # If region2 was the merged one, update it to region1
+            new_edge = (merged_region1, region1) if region2 == merged_region2 else (merged_region1, region2)
+            affected_edges.add(new_edge)
+            del edge_probabilities[edge]  # Remove the old edge
+
+    # Update segment sizes
+    segment_sizes[merged_region1] += segment_sizes[merged_region2]
+    del segment_sizes[merged_region2]  # Remove old segment size
+
+    # Recalculate probabilities for affected edges
+    for edge in affected_edges:
+        region1, region2 = edge
+        if edge in edge_values:
+            neighbor_values = edge_values[edge]["neighbor_values"]
+            flow_cos_values = edge_values[edge]["flow_cos_values"]
+
+            vol_min = min(segment_sizes[region1], segment_sizes[region2])
+            vol_max = max(segment_sizes[region1], segment_sizes[region2])
+
+            l_true_neighbors = l_models["true_neighbors"](neighbor_values)
+            l_false_neighbors = l_models["false_neighbors"](neighbor_values)
+            l_true_flow_cos = l_models["true_flow_cos"](flow_cos_values)
+            l_false_flow_cos = l_models["false_flow_cos"](flow_cos_values)
+
+            l_true_vol_min = l_models["true_boundary_log100_volumes_min"](vol_min)
+            l_true_vol_max = l_models["true_boundary_log100_volumes_max"](vol_max)
+            l_false_vol_min = l_models["false_boundary_log100_volumes_min"](vol_min)
+            l_false_vol_max = l_models["false_boundary_log100_volumes_max"](vol_max)
+
+            l_true = np.sum(l_true_neighbors) + np.sum(l_true_flow_cos) + l_true_vol_min + l_true_vol_max
+            l_false = np.sum(l_false_neighbors) + np.sum(l_false_flow_cos) + l_false_vol_min + l_false_vol_max
+
+            L_true = np.exp(l_true)
+            L_false = np.exp(l_false)
+            P_true = L_true / (L_true + L_false)
+
+            edge_probabilities[edge] = P_true  # Store updated probability
+
+    return edge_probabilities
+
+def construct_adaptive_segmentation(preseg_mask, graph, edge_probabilities, l_models, edge_values, segment_sizes, threshold=0.5):
+    """
+    Iteratively merges segments in `preseg_mask` based on edge probabilities, dynamically updating after each merge.
+
+    Args:
+        preseg_mask (np.ndarray): Pre-segmented mask.
+        graph (hg.UndirectedGraph): Region adjacency graph (RAG).
+        edge_probabilities (dict): Dictionary mapping edge (segment1, segment2) -> probability p(true).
+        threshold (float): Stopping criterion; merging stops when the smallest probability > threshold.
+
+    Returns:
+        np.ndarray: New segmented image after merging.
+    """
+    # Get unique labels
+    unique_labels = np.unique(preseg_mask)
+    unique_labels = unique_labels[unique_labels > 0]  # Exclude background (0)
+
+    # Initialize Union-Find (Disjoint Set)
+    label_to_index = {int(label): int(i) for i, label in enumerate(unique_labels)}
+    parent = np.arange(len(unique_labels))  # Each segment is its own parent initially
+
+    def find(x):
+        """Find with path compression."""
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return int(parent[x])
+
+    def union(x, y):
+        """Union by rank."""
+        root_x, root_y = find(x), find(y)
+        if root_x != root_y:
+            parent[root_y] = root_x
+
+    # Sort edges by probability (ascending order)
+    sorted_edges = sorted(edge_probabilities.items(), key=lambda x: x[1])
+
+    merged_count = 0
+
+    while sorted_edges:
+        # Pick the lowest probability edge
+        (region1, region2), prob = sorted_edges.pop(0)
+
+        if prob > threshold:
+            break  # Stop merging when the probability exceeds threshold
+
+        # Merge segments
+        if region1 in label_to_index and region2 in label_to_index:
+            idx1, idx2 = int(label_to_index[region1]), int(label_to_index[region2])
+            union(idx1, idx2)
+            merged_count += 1
+
+            # Update edge probabilities after merging
+            edge_probabilities = update_probabilities(edge_probabilities, region1, region2, graph, l_models, edge_values, segment_sizes)
+
+            # Re-sort edges after updating probabilities
+            sorted_edges = sorted(edge_probabilities.items(), key=lambda x: x[1])
+
+    print('Total merged:', merged_count)
+
+    # Create a mapping from old labels to new merged labels
+    new_labels = {int(label): find(label_to_index[label]) + 1 for label in unique_labels}  # +1 to avoid 0
+    # Relabel the preseg_mask
+    adaptive_segmentation = np.vectorize(lambda x: new_labels.get(x, 0))(preseg_mask)
+
+    return adaptive_segmentation

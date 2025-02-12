@@ -10,7 +10,7 @@ from scipy.interpolate import interp1d
 from tree_seg.core.pre_segmentation import connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
 from tree_seg.pipeline.visualize import visualize_results
-from tree_seg.core.segmentation import construct_segmentation_graph,construct_threshold_segmentation
+from tree_seg.core.segmentation import construct_segmentation_graph,construct_threshold_segmentation,construct_adaptive_segmentation
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
 
 # Setup logging
@@ -50,11 +50,11 @@ def histogram_interpolator(data, bins=50, min_entries=10):
     hist, bin_edges = np.histogram(data, bins=bins, density=True)
     counts, _ = np.histogram(data, bins=bins)  # Count number of points per bin
 
-    # Ensure bins have at least `min_entries`
-    while any(counts < min_entries):
-        bins = max(5, bins - 5)  # Reduce bin count dynamically
-        hist, bin_edges = np.histogram(data, bins=bins, density=True)
-        counts, _ = np.histogram(data, bins=bins)
+    # # Ensure bins have at least `min_entries`
+    # while any(counts < min_entries):
+    #     bins = max(5, bins - 5)  # Reduce bin count dynamically
+    #     hist, bin_edges = np.histogram(data, bins=bins, density=True)
+    #     counts, _ = np.histogram(data, bins=bins)
 
     # Compute bin centers
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -71,7 +71,6 @@ def histogram_interpolator(data, bins=50, min_entries=10):
     log_max = log_hist[-1] # Right boundary value
 
     return interp1d(bin_centers, log_hist, kind="linear", fill_value=(log_min, log_max), bounds_error=False)
-
 
 
 ### 🔹 LOAD CSV DATA & CREATE INTERPOLATORS
@@ -246,16 +245,18 @@ def load_and_prepare_segmentation(config):
         
 
         preseg_mask = relabel_sequentially_3D(preseg_mask)
-        graph, edge_probabilities=construct_segmentation_graph(preseg_mask.copy(),flow,neighbors,interpolators)
-        threshold_segmentation_01=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.01)
+        graph, edge_probabilities, edge_values,segment_sizes=construct_segmentation_graph(preseg_mask.copy(),flow,neighbors,interpolators)
+        #threshold_segmentation_01=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.01)
         threshold_segmentation_05=construct_threshold_segmentation(preseg_mask.copy(),graph, edge_probabilities,0.5)
         
-        todo proper graph like approach
+        adaptive_seg=construct_adaptive_segmentation(preseg_mask, graph, edge_probabilities,interpolators, edge_values, segment_sizes, threshold=0.5)
+        #todo proper graph like approach
 
         import napari
         viewer=napari.Viewer()
         viewer.add_labels(threshold_segmentation_05,name='thr_seg 05')
-        viewer.add_labels(threshold_segmentation_01,name='thr_seg 01')
+        #viewer.add_labels(threshold_segmentation_01,name='thr_seg 01')
+        viewer.add_labels(adaptive_seg,name='adaptive_seg')
         viewer.add_labels(preseg_mask,name='preseg')
         napari.run()
 
