@@ -23,7 +23,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
     os.makedirs(results_folder, exist_ok=True)
 
     subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
-
+    
     logging.info(f"Found {len(subfolders)} subfolders to process.")
 
     for subfolder in tqdm(subfolders):
@@ -35,13 +35,13 @@ def apply_model_to_folders(data_folder, results_folder, config):
         os.makedirs(sub_output_folder, exist_ok=True)
 
         # Define input and output paths
-        image_path = os.path.join(subfolder, config["nuclei_name"])
-        seg_output_path = os.path.join(sub_output_folder, config["mask_name"])
+        image_path = os.path.join(subfolder, config["gt_nuclei_name"])
+        mask_output_path = os.path.join(sub_output_folder, config["mask_name"])
         flow_output_path = os.path.join(sub_output_folder, config["flow_name"])
         neighbor_output_path = os.path.join(sub_output_folder, config["neighbor_name"])
 
         # Skip processing if segmentation already exists
-        if os.path.exists(seg_output_path) and not force_recompute:
+        if os.path.exists(mask_output_path) and not force_recompute:
             logging.info(f"Skipping {data_name}, results already exist.")
             continue
 
@@ -51,7 +51,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
             continue
 
         image = tiff.imread(image_path)
-        profile_path = os.path.join(subfolder, config["profile_name"])
+        profile_path = os.path.join(subfolder, config["gt_profile_name"])
         if not os.path.exists(profile_path):
             logging.warning(f"Skipping {data_name}, missing profile file: {profile_path}")
             continue
@@ -59,12 +59,12 @@ def apply_model_to_folders(data_folder, results_folder, config):
 
         # Apply model
         logging.info(f"Processing {data_name}...")
-        segmentation, pred_flows, neighbor_preds = apply_model(config, image,profile)
+        pred_mask, pred_flow, pred_neighbors = apply_model(config, image,profile)
         
         # Save results
-        tiff.imwrite(seg_output_path, segmentation.astype(bool))
-        np.save(flow_output_path, pred_flows)
-        np.save(neighbor_output_path, neighbor_preds)
+        tiff.imwrite(mask_output_path, pred_mask.astype(bool))
+        np.save(flow_output_path, pred_flow)
+        np.save(neighbor_output_path, pred_neighbors)
 
         logging.info(f"✅ Processed {data_name}: Saved results in {sub_output_folder}")
 

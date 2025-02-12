@@ -45,7 +45,7 @@ def convert_flow_to_vectors(flow):
 
 
 
-def visualize_results(config):
+def visualize_traininig_res(config):
     """
     Iterate through all processed results and visualize them in Napari.
 
@@ -55,6 +55,7 @@ def visualize_results(config):
     data_folder = config["data_folder"]
     app_gt_subfolder = os.path.join(config['results_folder'], 'applied_to_gt') 
     precomputed_subfolder = os.path.join(config['results_folder'], 'precomputed') 
+    preseg_subfolder = os.path.join(config['results_folder'], 'presegmentation') 
 
     subfolders = sorted(glob(os.path.join(data_folder, "*")))  # List all subdirectories
 
@@ -66,24 +67,27 @@ def visualize_results(config):
 
         data_name = os.path.basename(subfolder)
         app_gt_folder = os.path.join(app_gt_subfolder, data_name)
+        preseg_folder = os.path.join(preseg_subfolder, data_name)
         precomputed_folder = os.path.join(precomputed_subfolder, data_name)
 
-        image_path = os.path.join(subfolder, config["nuclei_name"])
-        gt_seg_path = os.path.join(subfolder, config["mask_name"])
-        flow_gt_path = os.path.join(precomputed_folder, config["flow_name"])
-        neighbor_gt_path = os.path.join(precomputed_folder, config["neighbor_name"])
-        seg_output_path = os.path.join(app_gt_folder, config["mask_name"])
+        image_path = os.path.join(subfolder, config["gt_nuclei_name"])
+        gt_seg_path = os.path.join(subfolder, config["gt_segmentation_name"])
+        flow_gt_path = os.path.join(precomputed_folder, config["gt_flow_name"])
+        neighbor_gt_path = os.path.join(precomputed_folder, config["gt_neighbor_name"])
+        mask_output_path = os.path.join(app_gt_folder, config["mask_name"])
         flow_output_path = os.path.join(app_gt_folder, config["flow_name"])
         neighbor_output_path = os.path.join(app_gt_folder, config["neighbor_name"])
+        preseg_output_path = os.path.join(preseg_folder, "presegmentation.tif")
 
         # Load data
         nuclei = tiff.imread(image_path)
         gt_seg = tiff.imread(gt_seg_path)
         gt_flow = np.load(flow_gt_path)
         gt_neighbors = np.load(neighbor_gt_path)
-        segmentation = tiff.imread(seg_output_path)
+        mask = tiff.imread(mask_output_path)
         flow = np.load(flow_output_path)
         neighbors = np.load(neighbor_output_path)
+        preseg = tiff.imread(preseg_output_path)
 
         
 
@@ -94,18 +98,18 @@ def visualize_results(config):
         viewer.add_image(nuclei, name="Nuclei", colormap="gray", blending="additive")
 
         # Display segmentation results
-        viewer.add_labels(segmentation, name="Segmentation")
+        viewer.add_labels(mask, name="mask")
 
+        viewer.add_labels(preseg, name="preseg")
 
-        for i in range(6):
-            viewer.add_image(neighbors[i], name=f"Neighbor {i+1}", colormap="viridis")
+        # for i in range(6):
+        #     viewer.add_image(neighbors[i], name=f"Neighbor {i+1}", colormap="viridis")
 
         # Display ground truth segmentation
         viewer.add_labels(gt_seg, name="GT Segmentation")
 
-  
-        for i in range(6):
-            viewer.add_labels(gt_neighbors[i], name=f"GT Neighbor {i+1}")
+        # for i in range(6):
+        #     viewer.add_labels(gt_neighbors[i], name=f"GT Neighbor {i+1}")
 
         # Display flow vectors as dense arrow fields
         if config.get("show_flow", False):

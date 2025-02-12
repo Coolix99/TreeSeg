@@ -7,15 +7,18 @@ from glob import glob
 import tifffile as tiff
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
-import pickle
-import seaborn as sns
+import scipy.stats as stats
+from itertools import combinations
+
+# from bokeh.plotting import figure, show
+# from bokeh.layouts import gridplot
+# from bokeh.models import  HoverTool
 
 from tree_seg.network_3D.pepare_data import calculateFlow, calculateNeighborConnection  
 from tree_seg.network_3D.train_unet import train_model  
 from tree_seg.core.pre_segmentation import connected_components_3D, euler_connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
-from tree_seg.pipeline.visualize import visualize_results
+from tree_seg.pipeline.visualize import visualize_traininig_res
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
 from tree_seg.metrices.matching import match_labels
 from tree_seg.core.neighbor_calculations import calculateBoundaryConnection
@@ -60,21 +63,6 @@ def save_concatenated_data(concatenated_data, output_folder):
 
     print(f"Saved: {true_csv_path}")
     print(f"Saved: {false_csv_path}")
-
-# def fit_and_save_kde(data, filename, results_folder):
-#     """Fits a KDE model and saves it as a pickle file."""
-#     if len(data) == 0:
-#         logging.warning(f"Skipping KDE fitting for {filename}, empty dataset.")
-#         return None
-
-#     kde = gaussian_kde(data,0.5)
-#     # kde_path = os.path.join(results_folder, filename)
-    
-#     # with open(kde_path, 'wb') as f:
-#     #     pickle.dump(kde, f)
-    
-#     # logging.info(f"📁 Saved KDE model: {kde_path}")
-#     return kde
 
 def plot_distribution(data, title, color, save_path):
     """Plots histogram and KDE curve, saves the plot."""
@@ -130,14 +118,6 @@ def compute_kde_contour(x, y, grid_size=100, levels=5):
     contour_levels = np.linspace(kde.min(), kde.max(), levels)
 
     return xx, yy, kde, contour_levels
-
-import numpy as np
-import pandas as pd
-import scipy.stats as stats
-from itertools import combinations
-from bokeh.plotting import figure, show
-from bokeh.layouts import gridplot
-from bokeh.models import  HoverTool
 
 def sample_data(data, sample_size=200):
     """Randomly samples rows while keeping column alignment."""
@@ -320,7 +300,6 @@ def compute_statistics(gt_segmentation, presegmentation, neighbors, flow, match_
             true_boundary_log100_volumes_min,true_boundary_log100_volumes_max, \
             false_boundary_log100_volumes_min,false_boundary_log100_volumes_max
 
-
 ### 🔹 WRAPPER FUNCTIONS
 
 def preprocess_and_cache(data_folder, output_folder, config):
@@ -352,10 +331,10 @@ def preprocess_and_cache(data_folder, output_folder, config):
         sub_output_folder = os.path.join(output_folder, data_name)
         os.makedirs(sub_output_folder, exist_ok=True)
 
-        mask_path = os.path.join(subfolder, config["mask_name"])
+        gt_segmentation_path = os.path.join(subfolder, config["gt_segmentation_name"])
         cache_paths = {
-            "flows": os.path.join(sub_output_folder, "flows.npy"),
-            "neighbors": os.path.join(sub_output_folder, "neighbors.npy"),
+            "gt_flows": os.path.join(sub_output_folder, config["gt_flow_name"]),
+            "gt_neighbors": os.path.join(sub_output_folder, config["gt_neighbor_name"]),
         }
 
         # **Skip if already computed and force_recompute=False**
@@ -364,13 +343,13 @@ def preprocess_and_cache(data_folder, output_folder, config):
             dataset_paths[data_name] = cache_paths
             continue
 
-        if not check_required_files([mask_path], data_name):
+        if not check_required_files([gt_segmentation_path], data_name):
             continue
 
         # Compute and save results
-        mask = tiff.imread(mask_path)
-        np.save(cache_paths["flows"], calculateFlow(mask))
-        np.save(cache_paths["neighbors"], calculateNeighborConnection(torch.tensor(mask)).cpu().numpy())
+        gt_segmentation = tiff.imread(gt_segmentation_path)
+        np.save(cache_paths["gt_flows"], calculateFlow(gt_segmentation))
+        np.save(cache_paths["gt_neighbors"], calculateNeighborConnection(torch.tensor(gt_segmentation)).cpu().numpy())
 
         dataset_paths[data_name] = cache_paths  
 
@@ -403,34 +382,34 @@ def train_and_save_model(config):
         logging.info(f"Skipping training. Model checkpoint already exists at {checkpoint_path}")
         return
 
-    masks, nuclei, profiles, flows, neighbors = [], [], [], [], []
+    gt_segmentation, nuclei, profiles, gt_flows, gt_neighbors = [], [], [], [], []
 
     for subfolder in sorted(os.listdir(data_folder)):
         data_path = os.path.join(data_folder, subfolder)
         result_path = os.path.join(results_folder, subfolder)
 
         required_files = {
-            "mask": os.path.join(data_path, config["mask_name"]),
-            "nuclei": os.path.join(data_path, config["nuclei_name"]),
-            "profile": os.path.join(data_path, config["profile_name"]),
-            "flow": os.path.join(result_path, "flows.npy"),
-            "neighbors": os.path.join(result_path, "neighbors.npy"),
+            "gt_segmentation": os.path.join(data_path, config["gt_segmentation_name"]),
+            "nuclei": os.path.join(data_path, config["gt_nuclei_name"]),
+            "profile": os.path.join(data_path, config["gt_profile_name"]),
+            "gt_flow": os.path.join(result_path, config["gt_flow_name"]),
+            "gt_neighbors": os.path.join(result_path, config["gt_neighbor_name"]),
         }
 
         if not check_required_files(required_files.values(), subfolder):
             continue  # Skip this subfolder if any file is missing
 
         # Load and store data
-        masks.append(tiff.imread(required_files["mask"]) > 0)
+        gt_segmentation.append(tiff.imread(required_files["gt_segmentation"]) > 0)
         nuclei.append(tiff.imread(required_files["nuclei"]))
         profiles.append(np.load(required_files["profile"]))
-        flows.append(np.load(required_files["flow"]))
-        neighbors.append(np.load(required_files["neighbors"]))
+        gt_flows.append(np.load(required_files["gt_flow"]))
+        gt_neighbors.append(np.load(required_files["gt_neighbors"]))
 
     # Train the model
     logging.info("Starting UNet3D training...")
     config["checkpoint_dir"] = checkpoint_dir
-    train_model(config, masks, nuclei, profiles, flows, neighbors)
+    train_model(config, gt_segmentation, nuclei, profiles, gt_flows, gt_neighbors)
     logging.info(f"✅ Training complete. Model saved in {checkpoint_dir}")
 
 def run_pre_segmentation(config):
@@ -459,7 +438,7 @@ def run_pre_segmentation(config):
         os.makedirs(output_folder, exist_ok=True)
 
         # Define file paths
-        mask_path = os.path.join(subfolder_path, config["mask_name"])
+        gt_segmentation_path = os.path.join(subfolder_path, config["mask_name"])
         flow_path = os.path.join(subfolder_path, config["flow_name"])
         preseg_output_path = os.path.join(output_folder, "presegmentation.tif")
 
@@ -469,11 +448,11 @@ def run_pre_segmentation(config):
             continue
 
         # Check if required files exist
-        if not check_required_files([mask_path, flow_path], subfolder):
+        if not check_required_files([gt_segmentation_path, flow_path], subfolder):
             continue
 
         # Load mask and flow
-        mask = tiff.imread(mask_path) > 0  # Convert to binary mask
+        mask = tiff.imread(gt_segmentation_path) > 0  # Convert to binary mask
         flow = np.load(flow_path)  # Shape: (3, D, H, W)
 
         # Compute connected components (pre-segmentation)
@@ -519,12 +498,12 @@ def compute_and_save_statistics(config, plot=False):
     all_stats = []
 
     for subfolder in sorted(os.listdir(preseg_folder)):
-        gt_path = os.path.join(config["data_folder"], subfolder, config["mask_name"])
+        gt_path = os.path.join(config["data_folder"], subfolder, config["gt_segmentation_name"])
         required_files = {
             "gt": gt_path,
             "preseg": os.path.join(preseg_folder, subfolder, "presegmentation.tif"),
-            "neighbors": os.path.join(applied_to_gt_folder, subfolder, "neighbors.npy"),
-            "flows": os.path.join(applied_to_gt_folder, subfolder, "flows.npy"),
+            "neighbors": os.path.join(applied_to_gt_folder, subfolder, config["neighbor_name"]),
+            "flows": os.path.join(applied_to_gt_folder, subfolder, config["flow_name"]),
         }
 
         if not check_required_files(required_files.values(), subfolder):
@@ -573,7 +552,7 @@ def compute_and_save_statistics(config, plot=False):
     
 ### 🔹 HOLE PIPELINE
 
-def main(config):
+def train_main(config):
     """
     Main pipeline to preprocess 3D data and train UNet3D.
 
@@ -593,15 +572,17 @@ def main(config):
     logging.info("✅ Training complete. Model saved in results folder.")
    
     logging.info("Starting model application...")
-    config["apply_result_folder"]= os.path.join(config["results_folder"],'applied_to_gt') 
+    config["apply_result_folder"] = os.path.join(config["results_folder"],'applied_to_gt') 
+    config["model_path"] = os.path.join(config["results_folder"],"checkpoints",config["model_name"])
     apply_model(config)
 
-    if config.get("visualize", False):
-        logging.info("Starting visualization...")
-        visualize_results(config)
-    
     logging.info("Starting pre-segmentation...")
     run_pre_segmentation(config)
-
+    
     logging.info("Starting statistics estimation...")
     compute_and_save_statistics(config,True)
+    
+    if config.get("visual_debugging", False):
+        logging.info("Starting visualization...")
+        visualize_traininig_res(config)
+

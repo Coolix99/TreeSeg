@@ -83,9 +83,9 @@ def apply_model(config, image, profile):
                 positions.append(pos[i].numpy())
 
     # Reconstruct full image
-    segmentation, pred_flows, neighbor_preds = reconstruct_image(image.shape, config["patch_size"], processed_patches, positions)
+    pred_mask, pred_flows, neighbor_preds = reconstruct_image(image.shape, config["patch_size"], processed_patches, positions)
 
-    return segmentation, pred_flows, neighbor_preds
+    return pred_mask, pred_flows, neighbor_preds
 
 def reconstruct_image(image_shape, patch_size, patches, positions):
     """Reconstruct the full 3D image from overlapping patches."""
