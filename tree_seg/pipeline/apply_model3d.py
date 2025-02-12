@@ -35,7 +35,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
         os.makedirs(sub_output_folder, exist_ok=True)
 
         # Define input and output paths
-        image_path = os.path.join(subfolder, config["gt_nuclei_name"])
+        image_path = os.path.join(subfolder, config["nuclei_name"])
         mask_output_path = os.path.join(sub_output_folder, config["mask_name"])
         flow_output_path = os.path.join(sub_output_folder, config["flow_name"])
         neighbor_output_path = os.path.join(sub_output_folder, config["neighbor_name"])
@@ -51,7 +51,7 @@ def apply_model_to_folders(data_folder, results_folder, config):
             continue
 
         image = tiff.imread(image_path)
-        profile_path = os.path.join(subfolder, config["gt_profile_name"])
+        profile_path = os.path.join(subfolder, config["profile_name"])
         if not os.path.exists(profile_path):
             logging.warning(f"Skipping {data_name}, missing profile file: {profile_path}")
             continue

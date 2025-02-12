@@ -574,6 +574,8 @@ def train_main(config):
     logging.info("Starting model application...")
     config["apply_result_folder"] = os.path.join(config["results_folder"],'applied_to_gt') 
     config["model_path"] = os.path.join(config["results_folder"],"checkpoints",config["model_name"])
+    config["nuclei_name"] = config["gt_nuclei_name"]
+    config["profile_name"] = config["gt_profile_name"]
     apply_model(config)
 
     logging.info("Starting pre-segmentation...")

@@ -9,7 +9,7 @@ from scipy.interpolate import interp1d
 
 from tree_seg.core.pre_segmentation import connected_components_3D
 from tree_seg.pipeline.apply_model3d import main as apply_model
-from tree_seg.pipeline.visualize import visualize_results
+#from tree_seg.pipeline.visualize import visualize_results
 from tree_seg.core.segmentation import construct_segmentation_graph,construct_threshold_segmentation,construct_adaptive_segmentation
 from tree_seg.metrices.label_operations import relabel_sequentially_3D
 
@@ -264,13 +264,9 @@ def load_and_prepare_segmentation(config):
     logging.info("✅ Segmentation data loaded and prepared.")
 
 
-
-
-
-
 ### 🔹 HOLE PIPELINE
 
-def main(config):
+def segment_main(config):
     """
     Main pipeline for applying the trained UNet3D model to unseen nuclei data.
 
